@@ -541,7 +541,7 @@ func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) []dat
 func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, err error) {
 	now := int(time.Now().Unix()) // TODO: danger of 2030 something overflow
 	if fromTime > untilTime {
-		return nil, fmt.Errorf("Invalid time interval: from time '%s' is after until time '%s'", fromTime, untilTime)
+		return nil, fmt.Errorf("Invalid time interval: from time '%d' is after until time '%d'", fromTime, untilTime)
 	}
 	oldestTime := now - whisper.maxRetention
 	// range is in the future
