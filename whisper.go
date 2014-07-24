@@ -288,10 +288,48 @@ func (whisper *Whisper) Size() int {
 }
 
 /*
-  Calculate the number of bytes the metadata section will be.  
+  Calculate the number of bytes the metadata section will be.
 */
 func (whisper *Whisper) MetadataSize() int {
 	return MetadataSize + (ArchiveInfoSize * len(whisper.archives))
+}
+
+/* Return aggregation method */
+func (whisper *Whisper) AggregationMethod() string {
+	aggr := "unknown"
+	switch whisper.aggregationMethod {
+	case Average:
+		aggr = "Average"
+	case Sum:
+		aggr = "Sum"
+	case Last:
+		aggr = "Last"
+	case Max:
+		aggr = "Max"
+	case Min:
+		aggr = "Min"
+	}
+	return aggr
+}
+
+/* Return max retention in seconds */
+func (whisper *Whisper) MaxRetention() int {
+	return whisper.maxRetention
+}
+
+/* Return xFilesFactor */
+func (whisper *Whisper) XFilesFactor() float32 {
+	return whisper.xFilesFactor
+}
+
+/* Return retentions */
+func (whisper *Whisper) Retentions() []Retention {
+	ret := make([]Retention, 0, 4)
+	for _, archive := range whisper.archives {
+		ret = append(ret, archive.Retention)
+	}
+
+	return ret
 }
 
 /*
@@ -504,12 +542,12 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 		currentInterval += higher.secondsPerPoint
 	}
 
-	// propagate aggregateValue to propagate from neighborValues if we have enough known points        
+	// propagate aggregateValue to propagate from neighborValues if we have enough known points
 	if len(knownValues) == 0 {
 		return false, nil
 	}
 	knownPercent := float32(len(knownValues)) / float32(len(series))
-	if knownPercent < whisper.xFilesFactor { // check we have enough data points to propagate a value       
+	if knownPercent < whisper.xFilesFactor { // check we have enough data points to propagate a value
 		return false, nil
 	} else {
 		aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
@@ -632,6 +670,14 @@ func (retention *Retention) MaxRetention() int {
 
 func (retention *Retention) Size() int {
 	return retention.numberOfPoints * PointSize
+}
+
+func (retention *Retention) SecondsPerPoint() int {
+	return retention.secondsPerPoint
+}
+
+func (retention *Retention) NumberOfPoints() int {
+	return retention.numberOfPoints
 }
 
 type Retentions []*Retention
