@@ -232,7 +232,12 @@ func Open(path string) (whisper *Whisper, err error) {
 	b := make([]byte, MetadataSize)
 	offset := 0
 	file.Read(b)
-	whisper.aggregationMethod = AggregationMethod(unpackInt(b[offset : offset+IntSize]))
+	a := unpackInt(b[offset : offset+IntSize])
+	if a > 1024 { // support very old format. File starts with lastUpdate and has only average aggregation method
+		whisper.aggregationMethod = Average
+	} else {
+		whisper.aggregationMethod = AggregationMethod(a)
+	}
 	offset += IntSize
 	whisper.maxRetention = unpackInt(b[offset : offset+IntSize])
 	offset += IntSize
