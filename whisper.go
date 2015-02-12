@@ -294,6 +294,44 @@ func (whisper *Whisper) MetadataSize() int {
 	return MetadataSize + (ArchiveInfoSize * len(whisper.archives))
 }
 
+/* Return aggregation method */
+func (whisper *Whisper) AggregationMethod() string {
+	aggr := "unknown"
+	switch whisper.aggregationMethod {
+	case Average:
+		aggr = "Average"
+	case Sum:
+		aggr = "Sum"
+	case Last:
+		aggr = "Last"
+	case Max:
+		aggr = "Max"
+	case Min:
+		aggr = "Min"
+	}
+	return aggr
+}
+
+/* Return max retention in seconds */
+func (whisper *Whisper) MaxRetention() int {
+	return whisper.maxRetention
+}
+
+/* Return xFilesFactor */
+func (whisper *Whisper) XFilesFactor() float32 {
+	return whisper.xFilesFactor
+}
+
+/* Return retentions */
+func (whisper *Whisper) Retentions() []Retention {
+	ret := make([]Retention, 0, 4)
+	for _, archive := range whisper.archives {
+		ret = append(ret, archive.Retention)
+	}
+
+	return ret
+}
+
 /*
   Update a value in the database.
 
@@ -640,6 +678,14 @@ func (retention *Retention) MaxRetention() int {
 
 func (retention *Retention) Size() int {
 	return retention.numberOfPoints * PointSize
+}
+
+func (retention *Retention) SecondsPerPoint() int {
+	return retention.secondsPerPoint
+}
+
+func (retention *Retention) NumberOfPoints() int {
+	return retention.numberOfPoints
 }
 
 type Retentions []*Retention
