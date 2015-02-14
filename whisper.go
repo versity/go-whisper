@@ -183,7 +183,7 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 		remaining -= chunkSize
 	}
 	whisper.file.Write(zeros[:remaining])
-	whisper.file.Sync()
+	// whisper.file.Sync()
 
 	return whisper, nil
 }
