@@ -381,9 +381,20 @@ func (whisper *Whisper) Update(value float64, timestamp int) (err error) {
 	return nil
 }
 
+func reversePoints(points []*TimeSeriesPoint) {
+	size := len(points)
+	end := size / 2
+
+	for i := 0; i < end; i++ {
+		points[i], points[size-i-1] = points[size-i-1], points[i]
+	}
+}
+
 func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) {
 	// sort the points, newest first
-	sort.Sort(timeSeriesPointsNewestFirst{points})
+
+	reversePoints(points)
+	sort.Stable(timeSeriesPointsNewestFirst{points})
 
 	now := int(time.Now().Unix()) // TODO: danger of 2030 something overflow
 
@@ -394,9 +405,7 @@ func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) {
 			continue
 		}
 		// reverse currentPoints
-		for i, j := 0, len(currentPoints)-1; i < j; i, j = i+1, j-1 {
-			currentPoints[i], currentPoints[j] = currentPoints[j], currentPoints[i]
-		}
+		reversePoints(currentPoints)
 		whisper.archiveUpdateMany(&archive, currentPoints)
 
 		if len(points) == 0 { // nothing left to do

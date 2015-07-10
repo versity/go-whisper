@@ -566,3 +566,31 @@ func TestTimeSeriesPoints(t *testing.T) {
 		t.Fatalf("Unexpected number of points in time series, %v", length)
 	}
 }
+
+func TestUpdateManyWithEqualTimestamp(t *testing.T) {
+	now := int(time.Now().Unix())
+	points := []*TimeSeriesPoint{}
+
+	// add points
+	// now timestamp: 0,99,2,97,...,3,99,1
+	// now-1 timestamp: 100,1,98,...,97,2,99
+
+	for i := 0; i < 100; i++ {
+		if i%2 == 0 {
+			points = append(points, &TimeSeriesPoint{now, float64(i)})
+			points = append(points, &TimeSeriesPoint{now - 1, float64(100 - i)})
+		} else {
+			points = append(points, &TimeSeriesPoint{now, float64(100 - i)})
+			points = append(points, &TimeSeriesPoint{now - 1, float64(i)})
+		}
+	}
+
+	result := testCreateUpdateManyFetch(t, Average, 0.5, points, 2, 10)
+
+	if result.values[0] != 99.0 {
+		t.Fatalf("Incorrect saved value. Expected %v, received %v", 99.0, result.values[0])
+	}
+	if result.values[1] != 1.0 {
+		t.Fatalf("Incorrect saved value. Expected %v, received %v", 1.0, result.values[1])
+	}
+}
