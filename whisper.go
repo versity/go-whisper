@@ -130,7 +130,7 @@ type Whisper struct {
 	aggregationMethod AggregationMethod
 	maxRetention      int
 	xFilesFactor      float32
-	archives          []archiveInfo
+	archives          []*archiveInfo
 }
 
 /*
@@ -163,9 +163,9 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 
 	// Set the archive info
 	offset := MetadataSize + (ArchiveInfoSize * len(retentions))
-	whisper.archives = make([]archiveInfo, 0, len(retentions))
+	whisper.archives = make([]*archiveInfo, 0, len(retentions))
 	for _, retention := range retentions {
-		whisper.archives = append(whisper.archives, archiveInfo{*retention, offset})
+		whisper.archives = append(whisper.archives, &archiveInfo{*retention, offset})
 		offset += retention.Size()
 	}
 
@@ -223,15 +223,34 @@ func validateRetentions(retentions Retentions) error {
 func Open(path string) (whisper *Whisper, err error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
-		return nil, err
+		return
 	}
+
+	defer func() {
+		if err != nil {
+			whisper = nil
+			file.Close()
+		}
+	}()
+
 	whisper = new(Whisper)
 	whisper.file = file
 
+	offset := 0
+
 	// read the metadata
 	b := make([]byte, MetadataSize)
-	offset := 0
-	file.Read(b)
+	readed, err := file.Read(b)
+
+	if err != nil {
+		err = fmt.Errorf("Unable to read header: %s", err.Error())
+		return
+	}
+	if readed != MetadataSize {
+		err = fmt.Errorf("Unable to read header: EOF")
+		return
+	}
+
 	a := unpackInt(b[offset : offset+IntSize])
 	if a > 1024 { // support very old format. File starts with lastUpdate and has only average aggregation method
 		whisper.aggregationMethod = Average
@@ -247,11 +266,16 @@ func Open(path string) (whisper *Whisper, err error) {
 	offset += IntSize
 
 	// read the archive info
-	b = make([]byte, ArchiveInfoSize*archiveCount)
-	file.Read(b)
-	whisper.archives = make([]archiveInfo, archiveCount)
+	b = make([]byte, ArchiveInfoSize)
+
+	whisper.archives = make([]*archiveInfo, 0)
 	for i := 0; i < archiveCount; i++ {
-		whisper.archives[i] = unpackArchiveInfo(b[i*ArchiveInfoSize : (i+1)*ArchiveInfoSize])
+		readed, err = file.Read(b)
+		if err != nil || readed != ArchiveInfoSize {
+			err = fmt.Errorf("Unable to read archive %d metadata", i)
+			return
+		}
+		whisper.archives = append(whisper.archives, unpackArchiveInfo(b))
 	}
 
 	return whisper, nil
@@ -348,8 +372,8 @@ func (whisper *Whisper) Update(value float64, timestamp int) (err error) {
 	if !(diff < whisper.maxRetention && diff >= 0) {
 		return fmt.Errorf("Timestamp not covered by any archives in this database")
 	}
-	var archive archiveInfo
-	var lowerArchives []archiveInfo
+	var archive *archiveInfo
+	var lowerArchives []*archiveInfo
 	var i int
 	for i, archive = range whisper.archives {
 		if archive.MaxRetention() < diff {
@@ -362,14 +386,14 @@ func (whisper *Whisper) Update(value float64, timestamp int) (err error) {
 	myInterval := timestamp - mod(timestamp, archive.secondsPerPoint)
 	point := dataPoint{myInterval, value}
 
-	_, err = whisper.file.WriteAt(point.Bytes(), whisper.getPointOffset(myInterval, &archive))
+	_, err = whisper.file.WriteAt(point.Bytes(), whisper.getPointOffset(myInterval, archive))
 	if err != nil {
 		return err
 	}
 
 	higher := archive
 	for _, lower := range lowerArchives {
-		propagated, err := whisper.propagate(myInterval, &higher, &lower)
+		propagated, err := whisper.propagate(myInterval, higher, lower)
 		if err != nil {
 			return err
 		} else if !propagated {
@@ -406,7 +430,7 @@ func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) {
 		}
 		// reverse currentPoints
 		reversePoints(currentPoints)
-		whisper.archiveUpdateMany(&archive, currentPoints)
+		whisper.archiveUpdateMany(archive, currentPoints)
 
 		if len(points) == 0 { // nothing left to do
 			break
@@ -435,7 +459,7 @@ func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSe
 		}
 	}
 
-	higher := *archive
+	higher := archive
 	lowerArchives := whisper.lowerArchives(archive)
 
 	for _, lower := range lowerArchives {
@@ -444,7 +468,7 @@ func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSe
 		for _, point := range alignedPoints {
 			interval := point.interval - mod(point.interval, lower.secondsPerPoint)
 			if !seen[interval] {
-				if propagated, err := whisper.propagate(interval, &higher, &lower); err != nil {
+				if propagated, err := whisper.propagate(interval, higher, lower); err != nil {
 					panic("Failed to propagate")
 				} else if propagated {
 					propagateFurther = true
@@ -522,7 +546,7 @@ func (whisper *Whisper) getBaseInterval(archive *archiveInfo) int {
 	return baseInterval
 }
 
-func (whisper *Whisper) lowerArchives(archive *archiveInfo) (lowerArchives []archiveInfo) {
+func (whisper *Whisper) lowerArchives(archive *archiveInfo) (lowerArchives []*archiveInfo) {
 	for i, lower := range whisper.archives {
 		if lower.secondsPerPoint > archive.secondsPerPoint {
 			return whisper.archives[i:]
@@ -621,7 +645,7 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 
 	// TODO: improve this algorithm it's ugly
 	diff := now - fromTime
-	var archive archiveInfo
+	var archive *archiveInfo
 	for _, archive = range whisper.archives {
 		if archive.MaxRetention() >= diff {
 			break
@@ -630,7 +654,7 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 
 	fromInterval := archive.Interval(fromTime)
 	untilInterval := archive.Interval(untilTime)
-	baseInterval := whisper.getBaseInterval(&archive)
+	baseInterval := whisper.getBaseInterval(archive)
 
 	if baseInterval == 0 {
 		step := archive.secondsPerPoint
@@ -645,7 +669,7 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 	fromOffset := archive.PointOffset(baseInterval, fromInterval)
 	untilOffset := archive.PointOffset(baseInterval, untilInterval)
 
-	series := whisper.readSeries(fromOffset, untilOffset, &archive)
+	series := whisper.readSeries(fromOffset, untilOffset, archive)
 
 	values := make([]float64, len(series))
 	for i, _ := range values {
@@ -883,8 +907,8 @@ func unpackFloat64(b []byte) float64 {
 	return math.Float64frombits(binary.BigEndian.Uint64(b))
 }
 
-func unpackArchiveInfo(b []byte) archiveInfo {
-	return archiveInfo{Retention{unpackInt(b[IntSize : IntSize*2]), unpackInt(b[IntSize*2 : IntSize*3])}, unpackInt(b[:IntSize])}
+func unpackArchiveInfo(b []byte) *archiveInfo {
+	return &archiveInfo{Retention{unpackInt(b[IntSize : IntSize*2]), unpackInt(b[IntSize*2 : IntSize*3])}, unpackInt(b[:IntSize])}
 }
 
 func unpackDataPoint(b []byte) dataPoint {

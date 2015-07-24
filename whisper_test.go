@@ -2,6 +2,7 @@ package whisper
 
 import (
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
 	"sort"
@@ -592,5 +593,60 @@ func TestUpdateManyWithEqualTimestamp(t *testing.T) {
 	}
 	if result.values[1] != 1.0 {
 		t.Fatalf("Incorrect saved value. Expected %v, received %v", 1.0, result.values[1])
+	}
+}
+
+func TestOpenValidatation(t *testing.T) {
+
+	testOpen := func(data []byte) {
+		path, _, _, tearDown := setUpCreate()
+		defer tearDown()
+
+		err := ioutil.WriteFile(path, data, 0777)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wsp, err := Open(path)
+		if wsp != nil {
+			t.Fatal("Opened bad file")
+		}
+		if err == nil {
+			t.Fatal("No error with file")
+		}
+	}
+
+	// Bad file with archiveCount = 1296223489
+	testOpen([]byte{
+		0xb8, 0x81, 0xd1, 0x1,
+		0xc, 0x0, 0x1, 0x2,
+		0x2e, 0x0, 0x0, 0x0,
+		0x4d, 0x42, 0xcd, 0x1, // archiveCount
+		0xc, 0x0, 0x2, 0x2,
+	})
+
+	fullHeader := []byte{
+		// Metadata
+		0x00, 0x00, 0x00, 0x01, // Aggregation type
+		0x00, 0x00, 0x0e, 0x10, // Max retention
+		0x3f, 0x00, 0x00, 0x00, // xFilesFactor
+		0x00, 0x00, 0x00, 0x03, // Retention count
+		// Archive Info
+		// Retention 1 (1, 300)
+		0x00, 0x00, 0x00, 0x34, // offset
+		0x00, 0x00, 0x00, 0x01, // secondsPerPoint
+		0x00, 0x00, 0x01, 0x2c, // numberOfPoints
+		// Retention 2 (60, 30)
+		0x00, 0x00, 0x0e, 0x44, // offset
+		0x00, 0x00, 0x00, 0x3c, // secondsPerPoint
+		0x00, 0x00, 0x00, 0x1e, // numberOfPoints
+		// Retention 3 (300, 12)
+		0x00, 0x00, 0x0f, 0xac, // offset
+		0x00, 0x00, 0x01, 0x2c, // secondsPerPoint
+		0x00, 0x00, 0x00, 0x0c, // numberOfPoints
+	}
+
+	for i := 0; i < len(fullHeader); i++ {
+		testOpen(fullHeader[:i])
 	}
 }
