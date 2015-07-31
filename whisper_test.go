@@ -670,6 +670,32 @@ func TestOpenValidatation(t *testing.T) {
 		}
 	}
 
+	testWrite := func(data []byte) {
+		path, _, _, tearDown := setUpCreate()
+		defer tearDown()
+
+		err := ioutil.WriteFile(path, data, 0777)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wsp, err := Open(path)
+		if wsp == nil || err != nil {
+			t.Fatal("Open error")
+		}
+
+		err = wsp.Update(42, int(time.Now().Unix()))
+		if err == nil {
+			t.Fatal("Update broken wsp without error")
+		}
+
+		points := makeGoodPoints(1000, 2, func(i int) float64 { return float64(i) })
+		err = wsp.UpdateMany(points)
+		if err == nil {
+			t.Fatal("Update broken wsp without error")
+		}
+	}
+
 	// Bad file with archiveCount = 1296223489
 	testOpen([]byte{
 		0xb8, 0x81, 0xd1, 0x1,
@@ -703,4 +729,6 @@ func TestOpenValidatation(t *testing.T) {
 	for i := 0; i < len(fullHeader); i++ {
 		testOpen(fullHeader[:i])
 	}
+
+	testWrite(fullHeader)
 }

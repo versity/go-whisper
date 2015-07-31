@@ -5,6 +5,7 @@ package whisper
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -134,6 +135,24 @@ type Whisper struct {
 }
 
 /*
+Wrappers for whisper.file operations with panic on error
+Better than nothing
+*/
+// file.WriteAt with panic
+func (whisper *Whisper) fileWriteAt(b []byte, off int64) {
+	if _, err := whisper.file.WriteAt(b, off); err != nil {
+		panic(err.Error())
+	}
+}
+
+// file.ReadAt with panic
+func (whisper *Whisper) fileReadAt(b []byte, off int64) {
+	if _, err := whisper.file.ReadAt(b, off); err != nil {
+		panic(err.Error())
+	}
+}
+
+/*
 	Create a new Whisper database file and write it's header.
 */
 func Create(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32) (whisper *Whisper, err error) {
@@ -179,10 +198,14 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 	chunkSize := 16384
 	zeros := make([]byte, chunkSize)
 	for remaining > chunkSize {
-		whisper.file.Write(zeros)
+		if _, err = whisper.file.Write(zeros); err != nil {
+			return nil, err
+		}
 		remaining -= chunkSize
 	}
-	whisper.file.Write(zeros[:remaining])
+	if _, err = whisper.file.Write(zeros[:remaining]); err != nil {
+		return nil, err
+	}
 	// whisper.file.Sync()
 
 	return whisper, nil
@@ -368,6 +391,13 @@ func (whisper *Whisper) Retentions() []Retention {
   fail immediately.
 */
 func (whisper *Whisper) Update(value float64, timestamp int) (err error) {
+	// recover panics and return as error
+	defer func() {
+		if e := recover(); e != nil {
+			err = errors.New(e.(string))
+		}
+	}()
+
 	diff := int(time.Now().Unix()) - timestamp
 	if !(diff < whisper.maxRetention && diff >= 0) {
 		return fmt.Errorf("Timestamp not covered by any archives in this database")
@@ -414,9 +444,15 @@ func reversePoints(points []*TimeSeriesPoint) {
 	}
 }
 
-func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) {
-	// sort the points, newest first
+func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) (err error) {
+	// recover panics and return as error
+	defer func() {
+		if e := recover(); e != nil {
+			err = errors.New(e.(string))
+		}
+	}()
 
+	// sort the points, newest first
 	reversePoints(points)
 	sort.Stable(timeSeriesPointsNewestFirst{points})
 
@@ -436,6 +472,7 @@ func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) {
 			break
 		}
 	}
+	return
 }
 
 func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSeriesPoint) {
@@ -452,10 +489,10 @@ func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSe
 		bytesBeyond := int(myOffset-archive.End()) + len(packedBlocks[i])
 		if bytesBeyond > 0 {
 			pos := len(packedBlocks[i]) - bytesBeyond
-			whisper.file.WriteAt(packedBlocks[i][:pos], myOffset)
-			whisper.file.WriteAt(packedBlocks[i][pos:], archive.Offset())
+			whisper.fileWriteAt(packedBlocks[i][:pos], myOffset)
+			whisper.fileWriteAt(packedBlocks[i][pos:], archive.Offset())
 		} else {
-			whisper.file.WriteAt(packedBlocks[i], myOffset)
+			whisper.fileWriteAt(packedBlocks[i], myOffset)
 		}
 	}
 
@@ -590,7 +627,9 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 	} else {
 		aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
 		point := dataPoint{lowerIntervalStart, aggregateValue}
-		whisper.file.WriteAt(point.Bytes(), whisper.getPointOffset(lowerIntervalStart, lower))
+		if _, err := whisper.file.WriteAt(point.Bytes(), whisper.getPointOffset(lowerIntervalStart, lower)); err != nil {
+			return false, err
+		}
 	}
 	return true, nil
 }
@@ -600,12 +639,12 @@ func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) []dat
 	var b []byte
 	if start < end {
 		b = make([]byte, end-start)
-		whisper.file.ReadAt(b, start)
+		whisper.fileReadAt(b, start)
 	} else {
 		b = make([]byte, archive.End()-start)
-		whisper.file.ReadAt(b, start)
+		whisper.fileReadAt(b, start)
 		b2 := make([]byte, end-archive.Offset())
-		whisper.file.ReadAt(b2, archive.Offset())
+		whisper.fileReadAt(b2, archive.Offset())
 		b = append(b, b2...)
 	}
 	return unpackDataPoints(b)
