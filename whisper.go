@@ -165,7 +165,7 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 // CreateWithOptions is more customizable create function
 func CreateWithOptions(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
 	if options == nil {
-		return nil, fmt.Errorf("options required")
+		options = &Options{}
 	}
 	sort.Sort(retentionsByPrecision{retentions})
 	if err = validateRetentions(retentions); err != nil {
