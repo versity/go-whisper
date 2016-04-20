@@ -44,6 +44,9 @@ const (
 	Min
 )
 
+type Options struct {
+}
+
 func unitMultiplier(s string) (int, error) {
 	switch {
 	case strings.HasPrefix(s, "s"):
@@ -156,6 +159,14 @@ func (whisper *Whisper) fileReadAt(b []byte, off int64) {
 	Create a new Whisper database file and write it's header.
 */
 func Create(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32) (whisper *Whisper, err error) {
+	return CreateWithOptions(path, retentions, aggregationMethod, xFilesFactor, &Options{})
+}
+
+// CreateWithOptions is more customizable create function
+func CreateWithOptions(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
+	if options == nil {
+		return nil, fmt.Errorf("options required")
+	}
 	sort.Sort(retentionsByPrecision{retentions})
 	if err = validateRetentions(retentions); err != nil {
 		return nil, err
