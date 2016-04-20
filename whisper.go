@@ -45,6 +45,7 @@ const (
 )
 
 type Options struct {
+	Sparse bool
 }
 
 func unitMultiplier(s string) (int, error) {
@@ -159,7 +160,9 @@ func (whisper *Whisper) fileReadAt(b []byte, off int64) {
 	Create a new Whisper database file and write it's header.
 */
 func Create(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32) (whisper *Whisper, err error) {
-	return CreateWithOptions(path, retentions, aggregationMethod, xFilesFactor, &Options{})
+	return CreateWithOptions(path, retentions, aggregationMethod, xFilesFactor, &Options{
+		Sparse: false,
+	})
 }
 
 // CreateWithOptions is more customizable create function
@@ -205,17 +208,26 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	}
 
 	// pre-allocate file size, fallocate proved slower
-	remaining := whisper.Size() - whisper.MetadataSize()
-	chunkSize := 16384
-	zeros := make([]byte, chunkSize)
-	for remaining > chunkSize {
-		if _, err = whisper.file.Write(zeros); err != nil {
+	if options.Sparse {
+		if _, err = whisper.file.Seek(int64(whisper.Size()-1), 0); err != nil {
 			return nil, err
 		}
-		remaining -= chunkSize
-	}
-	if _, err = whisper.file.Write(zeros[:remaining]); err != nil {
-		return nil, err
+		if _, err = whisper.file.Write([]byte{0}); err != nil {
+			return nil, err
+		}
+	} else {
+		remaining := whisper.Size() - whisper.MetadataSize()
+		chunkSize := 16384
+		zeros := make([]byte, chunkSize)
+		for remaining > chunkSize {
+			if _, err = whisper.file.Write(zeros); err != nil {
+				return nil, err
+			}
+			remaining -= chunkSize
+		}
+		if _, err = whisper.file.Write(zeros[:remaining]); err != nil {
+			return nil, err
+		}
 	}
 	// whisper.file.Sync()
 
