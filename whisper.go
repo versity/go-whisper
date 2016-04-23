@@ -144,11 +144,10 @@ func (whisper *Whisper) fileWriteAt(b []byte, off int64) error {
 	return err
 }
 
-// file.ReadAt with panic
-func (whisper *Whisper) fileReadAt(b []byte, off int64) {
-	if _, err := whisper.file.ReadAt(b, off); err != nil {
-		panic(err.Error())
-	}
+// Wrappers for file.ReadAt operations
+func (whisper *Whisper) fileReadAt(b []byte, off int64) error {
+	_, err := whisper.file.ReadAt(b, off)
+	return err
 }
 
 /*
@@ -635,7 +634,10 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 	relativeLastOffset := int64(mod(int(relativeFirstOffset+int64(higherSize)), higher.Size()))
 	higherLastOffset := relativeLastOffset + higher.Offset()
 
-	series := whisper.readSeries(higherFirstOffset, higherLastOffset, higher)
+	series, err := whisper.readSeries(higherFirstOffset, higherLastOffset, higher)
+	if err != nil {
+		return false, err
+	}
 
 	// and finally we construct a list of values
 	knownValues := make([]float64, 0, len(series))
@@ -665,20 +667,28 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 	return true, nil
 }
 
-// TODO: add error handling
-func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) []dataPoint {
+func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) ([]dataPoint, error) {
 	var b []byte
 	if start < end {
 		b = make([]byte, end-start)
-		whisper.fileReadAt(b, start)
+		err := whisper.fileReadAt(b, start)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		b = make([]byte, archive.End()-start)
-		whisper.fileReadAt(b, start)
+		err := whisper.fileReadAt(b, start)
+		if err != nil {
+			return nil, err
+		}
 		b2 := make([]byte, end-archive.Offset())
-		whisper.fileReadAt(b2, archive.Offset())
+		err = whisper.fileReadAt(b2, archive.Offset())
+		if err != nil {
+			return nil, err
+		}
 		b = append(b, b2...)
 	}
-	return unpackDataPoints(b)
+	return unpackDataPoints(b), nil
 }
 
 /*
@@ -739,7 +749,10 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 	fromOffset := archive.PointOffset(baseInterval, fromInterval)
 	untilOffset := archive.PointOffset(baseInterval, untilInterval)
 
-	series := whisper.readSeries(fromOffset, untilOffset, archive)
+	series, err := whisper.readSeries(fromOffset, untilOffset, archive)
+	if err != nil {
+		return nil, err
+	}
 
 	values := make([]float64, len(series))
 	for i := range values {
