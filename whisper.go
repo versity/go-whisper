@@ -809,6 +809,13 @@ func (retention *Retention) NumberOfPoints() int {
 	return retention.numberOfPoints
 }
 
+func NewRetention(secondsPerPoint, numberOfPoints int) Retention {
+	return Retention{
+		secondsPerPoint,
+		numberOfPoints,
+	}
+}
+
 type Retentions []*Retention
 
 func (r Retentions) Len() int {
