@@ -746,6 +746,11 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 		return &TimeSeries{fromInterval, untilInterval, step, values}, nil
 	}
 
+	// Zero-length time range: always include the next point
+	if fromInterval == untilInterval {
+		untilInterval += archive.SecondsPerPoint()
+	}
+
 	fromOffset := archive.PointOffset(baseInterval, fromInterval)
 	untilOffset := archive.PointOffset(baseInterval, untilInterval)
 
