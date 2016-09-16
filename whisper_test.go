@@ -338,6 +338,15 @@ func TestCreateUpdateFetch(t *testing.T) {
 
 }
 
+// Test for a bug in python whisper library: https://github.com/graphite-project/whisper/pull/136
+func TestCreateUpdateFetchOneValue(t *testing.T) {
+	var timeSeries *TimeSeries
+	timeSeries = testCreateUpdateFetch(t, Average, 0.5, 3500, 3500, 1, 300, 0.5, 0.2)
+	if len(timeSeries.values) > 1 {
+		t.Fatalf("More then one point fetched\n")
+	}
+}
+
 func BenchmarkCreateUpdateFetch(b *testing.B) {
 	path, _, archiveList, tearDown := setUpCreate()
 	var err error
