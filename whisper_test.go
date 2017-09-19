@@ -281,6 +281,51 @@ func testCreateUpdateFetch(t *testing.T, aggregationMethod AggregationMethod, xF
 	return timeSeries
 }
 
+func TestCheckEmpty(t *testing.T) {
+	var whisper *Whisper
+	var err error
+	var empty bool
+	path, _, retentions, tearDown := setUpCreate()
+	whisper, err = Create(path, retentions, Average, 0.5)
+	if err != nil {
+		fmt.Errorf("Failed to create: %v", err)
+	}
+	defer whisper.Close()
+	now := int(time.Now().Unix())
+	oldestTime := now - 60
+
+	empty, err = whisper.CheckEmpty(oldestTime, now)
+	if err != nil {
+		t.Fatalf("Error while check whisper file are empty: %s", err)
+	}
+	if !empty {
+		t.Fatal("Series should be empty in a full check, but it dosent")
+	}
+
+	err = whisper.Update(1, now-5)
+	if err != nil {
+		t.Fatalf("Unexpected error for  updating whisper file%s", err)
+	}
+
+	empty, err = whisper.CheckEmpty(oldestTime, now)
+	if err != nil {
+		t.Fatalf("Error while check whisper file are empty: %s", err)
+	}
+	if empty {
+		t.Fatal("Series should be not empty in a full check, but it is")
+	}
+
+	empty, err = whisper.CheckEmpty(now-60, now-10)
+	if err != nil {
+		t.Fatalf("Error while check whisper file are empty: %s", err)
+	}
+	if !empty {
+		t.Fatal("Series should be not empty in a full check, but it is")
+	}
+
+	tearDown()
+}
+
 func validTimestamp(value, stamp, step int) bool {
 	return value == nearestStep(stamp, step) || value == nearestStep(stamp, step)+step
 }
