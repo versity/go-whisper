@@ -302,7 +302,7 @@ func TestCheckEmpty(t *testing.T) {
 		t.Fatal("Series should be empty in a full check, but it dosent")
 	}
 
-	err = whisper.Update(1, now-5)
+	err = whisper.Update(1, now-30)
 	if err != nil {
 		t.Fatalf("Unexpected error for  updating whisper file%s", err)
 	}
@@ -315,7 +315,15 @@ func TestCheckEmpty(t *testing.T) {
 		t.Fatal("Series should be not empty in a full check, but it is")
 	}
 
-	empty, err = whisper.CheckEmpty(now-60, now-10)
+	empty, err = whisper.CheckEmpty(0, now)
+	if err != nil {
+		t.Fatalf("Error while check whisper file are empty: %s", err)
+	}
+	if empty {
+		t.Fatal("Series should be not empty in a full check, but it is")
+	}
+
+	empty, err = whisper.CheckEmpty(now-100, now-40)
 	if err != nil {
 		t.Fatalf("Error while check whisper file are empty: %s", err)
 	}

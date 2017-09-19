@@ -843,28 +843,31 @@ func (whisper *Whisper) CheckEmpty(fromTime, untilTime int) (exist bool, err err
 	diff := now - fromTime
 	var archive *archiveInfo
 	for _, archive = range whisper.archives {
+		fromInterval := archive.Interval(fromTime)
+		untilInterval := archive.Interval(untilTime)
+		baseInterval := whisper.getBaseInterval(archive)
+
+		if baseInterval == 0 {
+			return true, nil
+		}
+
+		// Zero-length time range: always include the next point
+		if fromInterval == untilInterval {
+			untilInterval += archive.SecondsPerPoint()
+		}
+
+		fromOffset := archive.PointOffset(baseInterval, fromInterval)
+		untilOffset := archive.PointOffset(baseInterval, untilInterval)
+
+		empty, err := whisper.checkSeriesEmpty(fromOffset, untilOffset, archive, fromTime, untilTime)
+		if err != nil || !empty {
+			return empty, err
+		}
 		if archive.MaxRetention() >= diff {
 			break
 		}
 	}
-
-	fromInterval := archive.Interval(fromTime)
-	untilInterval := archive.Interval(untilTime)
-	baseInterval := whisper.getBaseInterval(archive)
-
-	if baseInterval == 0 {
-		return true, nil
-	}
-
-	// Zero-length time range: always include the next point
-	if fromInterval == untilInterval {
-		untilInterval += archive.SecondsPerPoint()
-	}
-
-	fromOffset := archive.PointOffset(baseInterval, fromInterval)
-	untilOffset := archive.PointOffset(baseInterval, untilInterval)
-
-	return whisper.checkSeriesEmpty(fromOffset, untilOffset, archive, fromTime, untilTime)
+	return true, nil
 }
 
 func (whisper *Whisper) readInt(offset int64) (int, error) {
