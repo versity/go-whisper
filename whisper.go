@@ -691,6 +691,45 @@ func (whisper *Whisper) readSeries(start, end int64, archive *archiveInfo) ([]da
 	return unpackDataPoints(b), nil
 }
 
+func (whisper *Whisper) checkSeriesEmpty(start, end int64, archive *archiveInfo, fromTime, untilTime int) (bool, error) {
+	if start < end {
+		len := end - start
+		return whisper.checkSeriesEmptyAt(start, len, fromTime, untilTime)
+	}
+	len := archive.End() - start
+	empty, err := whisper.checkSeriesEmptyAt(start, len, fromTime, untilTime)
+	if err != nil || !empty {
+		return empty, err
+	}
+	return whisper.checkSeriesEmptyAt(archive.Offset(), end-archive.Offset(), fromTime, untilTime)
+
+}
+
+func (whisper *Whisper) checkSeriesEmptyAt(start, len int64, fromTime, untilTime int) (bool, error) {
+	b1 := make([]byte, 4)
+	// Read first point
+	err := whisper.fileReadAt(b1, start)
+	if err != nil {
+		return false, err
+	}
+	pointTime := unpackInt(b1)
+	if pointTime > fromTime && pointTime < untilTime {
+		return false, nil
+	}
+
+	b2 := make([]byte, 4)
+	// Read last point
+	err = whisper.fileReadAt(b2, len-12)
+	if err != nil {
+		return false, err
+	}
+	pointTime = unpackInt(b1)
+	if pointTime > fromTime && pointTime < untilTime {
+		return false, nil
+	}
+	return true, nil
+}
+
 /*
   Calculate the starting time for a whisper db.
 */
@@ -774,6 +813,61 @@ func (whisper *Whisper) Fetch(fromTime, untilTime int) (timeSeries *TimeSeries, 
 	}
 
 	return &TimeSeries{fromInterval, untilInterval, step, values}, nil
+}
+
+/*
+  Check a TimeSeries has a points for a given time span from the file.
+*/
+func (whisper *Whisper) CheckEmpty(fromTime, untilTime int) (exist bool, err error) {
+	now := int(time.Now().Unix()) // TODO: danger of 2030 something overflow
+	if fromTime > untilTime {
+		return true, fmt.Errorf("Invalid time interval: from time '%d' is after until time '%d'", fromTime, untilTime)
+	}
+	oldestTime := whisper.StartTime()
+	// range is in the future
+	if fromTime > now {
+		return true, nil
+	}
+	// range is beyond retention
+	if untilTime < oldestTime {
+		return true, nil
+	}
+	if fromTime < oldestTime {
+		fromTime = oldestTime
+	}
+	if untilTime > now {
+		untilTime = now
+	}
+
+	// TODO: improve this algorithm it's ugly
+	diff := now - fromTime
+	var archive *archiveInfo
+	for _, archive = range whisper.archives {
+		fromInterval := archive.Interval(fromTime)
+		untilInterval := archive.Interval(untilTime)
+		baseInterval := whisper.getBaseInterval(archive)
+
+		if baseInterval == 0 {
+			return true, nil
+		}
+
+		// Zero-length time range: always include the next point
+		if fromInterval == untilInterval {
+			untilInterval += archive.SecondsPerPoint()
+		}
+
+		fromOffset := archive.PointOffset(baseInterval, fromInterval)
+		untilOffset := archive.PointOffset(baseInterval, untilInterval)
+
+		empty, err := whisper.checkSeriesEmpty(fromOffset, untilOffset, archive, fromTime, untilTime)
+		if err != nil || !empty {
+			return empty, err
+		}
+		if archive.MaxRetention() >= diff {
+			break
+		}
+	}
+	return true, nil
 }
 
 func (whisper *Whisper) readInt(offset int64) (int, error) {
