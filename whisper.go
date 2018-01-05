@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,6 +47,7 @@ const (
 
 type Options struct {
 	Sparse bool
+	FLock  bool
 }
 
 func unitMultiplier(s string) (int, error) {
@@ -156,6 +158,7 @@ func (whisper *Whisper) fileReadAt(b []byte, off int64) error {
 func Create(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32) (whisper *Whisper, err error) {
 	return CreateWithOptions(path, retentions, aggregationMethod, xFilesFactor, &Options{
 		Sparse: false,
+		FLock: false,
 	})
 }
 
@@ -176,6 +179,14 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	if err != nil {
 		return nil, err
 	}
+
+	if options.FLock {
+		if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+			file.Close()
+			return nil, err
+		}
+	}
+
 	whisper = new(Whisper)
 
 	// Set the metadata
@@ -261,6 +272,12 @@ func validateRetentions(retentions Retentions) error {
   Open an existing Whisper database and read it's header
 */
 func Open(path string) (whisper *Whisper, err error) {
+	return OpenWithOptions(path, &Options{
+		FLock: false,
+	})
+}
+
+func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error) {
 	file, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
 		return
@@ -272,6 +289,12 @@ func Open(path string) (whisper *Whisper, err error) {
 			file.Close()
 		}
 	}()
+
+	if options.FLock {
+		if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+			return
+		}
+	}
 
 	whisper = new(Whisper)
 	whisper.file = file
