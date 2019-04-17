@@ -320,6 +320,7 @@ var fullTest3 = flag.Bool("full-test3", false, "run a full test of TestCompresse
 // Parallel is disabled because we need to manipulate Now in order to simulate
 // updates.
 func TestCompressedWhisperReadWrite3(t *testing.T) {
+	// TODO: add a test case of mixing random and sequential values/times
 	inputs := []struct {
 		name      string
 		randLimit func() int
@@ -339,7 +340,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
-					Time:  int(prevTime.Add(time.Duration(rand.Intn(4096)+1) * time.Second).Unix()),
+					Time:  int(prevTime.Add(time.Duration(rand.Intn(3600*24)+1) * time.Second).Unix()),
 				}
 			},
 		},

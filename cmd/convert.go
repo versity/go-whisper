@@ -24,16 +24,24 @@ import (
 	whisper "github.com/go-graphite/go-whisper"
 )
 
-func init() {
-	rand.Seed(time.Now().Unix())
-}
+var helpMessage = `convert: convert standard whisper files to compressed format
+
+Start a normal conversion:
+    convert -home /var/lib/carbon/convert -store /var/lib/carbon/whisper -rate 2 -one-off
+
+Run a one-off to convert a file:
+    convert -home /var/lib/carbon/convert -store metric.wsp -rate 2 -debug -one-off -force
+
+Or files:
+    convert -home /var/lib/carbon/convert -store *.wsp -rate 2 -debug -one-off -force
+`
 
 func main() {
+	rand.Seed(time.Now().Unix())
+
 	var storeDir = flag.String("store", "/var/lib/carbon/whisper", "path to whisper data files")
-	// var targetFile = flag.String("file", "", "only convert specified file")
-	var homdDir = flag.String("home", "/var/lib/carbon/convert", "home directory of convert")
+	var homdDir = flag.String("home", "/var/lib/carbon/convert", "home directory for saving conversion progress")
 	var rate = flag.Int("rate", runtime.NumCPU(), "count of concurrent conversion per second")
-	// var stopOnErrors = flag.Int("error", runtime.NumCPU(), "stop conversion when errors reach threshold")
 	var debug = flag.Bool("debug", false, "show debug info")
 	var force = flag.Bool("force", false, "ignore records progress.db and convert the files")
 	var oneoff = flag.Bool("one-off", false, "only scan once")
@@ -43,7 +51,7 @@ func main() {
 	flag.BoolVar(help, "h", false, "show help message")
 	flag.Parse()
 	if *help {
-		fmt.Println("convert: convert standard whisper files to compressed format")
+		fmt.Println(helpMessage)
 		flag.PrintDefaults()
 		os.Exit(0)
 	}
