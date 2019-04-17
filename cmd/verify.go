@@ -13,9 +13,7 @@ import (
 	whisper "github.com/go-graphite/go-whisper"
 )
 
-func init() {
-	log.SetFlags(log.Lshortfile)
-}
+func init() { log.SetFlags(log.Lshortfile) }
 
 func main() {
 	now := flag.Int("now", 0, "specify the current time")
@@ -23,6 +21,7 @@ func main() {
 	quarantinesRaw := flag.String("quarantines", "", "ignore data started from this point. e.g. 2019-02-21,2019-02-22")
 	verbose := flag.Bool("verbose", false, "be overly and nicely talkive")
 	strict := flag.Bool("strict", false, "exit 1 whenever there are discrepancies between between the files")
+	muteThreshold := flag.Int("mute-if-less", 2, "do not alarm if diff of points is less than specified.")
 	flag.BoolVar(verbose, "v", false, "be overly and nicely talkive")
 	flag.Parse()
 
@@ -60,11 +59,7 @@ func main() {
 	}
 
 	var bad bool
-	// var sums []string
 	for index, ret := range db1.Retentions() {
-		// now := int(whisper.Now().Unix())
-		// from := now - ret.MaxRetention()
-		// until := now
 		from := int(whisper.Now().Unix()) - ret.MaxRetention() + ret.SecondsPerPoint()*60
 		until := int(whisper.Now().Unix()) - 3600*8
 
@@ -169,15 +164,9 @@ func main() {
 			}
 		}
 		fmt.Printf("  point mismatches: %d\n", ptDiff)
-		if ptDiff <= 2 && !*strict {
+		if ptDiff <= *muteThreshold && !*strict {
 			bad = false
 		}
-
-		// if diff := cmp.Diff(dps1.Points(), dps2.Points(), cmp.AllowUnexported(whisper.TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
-		// 	fmt.Println(diff)
-		// 	fmt.Printf("error: does not match for %s\n", file1)
-		// 	bad = true
-		// }
 	}
 	if db1.IsCompressed() {
 		db1.CheckIntegrity()
