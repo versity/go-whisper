@@ -379,17 +379,6 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 				return &TimeSeriesPoint{Value: 0, Time: int(prevTime.Add(time.Second).Unix())}
 			},
 		},
-
-		// start = start.Add(time.Duration(rand.Intn(1024)) * time.Second)
-		// // start = start.Add(time.Second)
-		// ps = append(ps, &TimeSeriesPoint{
-		// 	Time: int(start.Add(time.Duration(i) * time.Second).Unix()),
-		// 	// Time:  int(start.Unix()),
-		// 	// Value: float64(i),
-		// 	// Value: 2000.0 + float64(rand.Intn(100000))/100.0,
-		// 	Value: rand.NormFloat64(),
-		// 	// Value: float64(rand.Intn(100000)),
-		// })
 	}
 
 	os.MkdirAll("tmp", 0755)

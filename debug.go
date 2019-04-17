@@ -113,8 +113,7 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 	fmt.Printf("  last_byte_bit_pos: %d\n", archive.cblock.lastByteBitPos)
 	fmt.Printf("  crc32:             %08x\n", archive.cblock.crc32)
 	fmt.Printf("  stats:\n")
-	fmt.Printf("     extend.block:     %d\n", archive.stats.extend.block)
-	fmt.Printf("     extend.pointSize: %d\n", archive.stats.extend.pointSize)
+	fmt.Printf("     extended:     %d\n", archive.stats.extended)
 	fmt.Printf("     discard.oldInterval: %d\n", archive.stats.discard.oldInterval)
 
 	for _, block := range archive.getSortedBlockRanges() {

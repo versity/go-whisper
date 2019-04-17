@@ -1243,9 +1243,7 @@ type archiveInfo struct {
 			same, sameLen, variedLen uint32
 		}
 
-		extend struct {
-			block, pointSize uint32
-		}
+		extended uint32
 
 		discard struct {
 			oldInterval uint32

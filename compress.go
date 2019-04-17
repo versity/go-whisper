@@ -22,8 +22,8 @@ var (
 
 	VersionSize = 1
 
-	CompressedArchiveInfoSize     = 96 + FreeCompressedArchiveInfoSize
-	FreeCompressedArchiveInfoSize = 32
+	CompressedArchiveInfoSize     = 92 + FreeCompressedArchiveInfoSize
+	FreeCompressedArchiveInfoSize = 36
 
 	BlockRangeSize = 16
 	endOfBlockSize = 5
@@ -96,9 +96,8 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 		i += packInt(b, archive.cblock.count, i)
 		i += packInt(b, int(archive.cblock.crc32), i)
 
-		i += packInt(b, int(archive.stats.extend.block), i)
-		i += packInt(b, int(archive.stats.extend.pointSize), i)
 		i += packInt(b, int(archive.stats.discard.oldInterval), i)
+		i += packInt(b, int(archive.stats.extended), i)
 
 		i += FreeCompressedArchiveInfoSize
 	}
@@ -130,16 +129,6 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 	return nil
 }
 
-// [whisper header]
-// [archive_0 header]
-// ...
-// [archive_n header]
-// [buffer_0]
-// ...
-// [buffer_n-1]
-// [archive0 blocks0]
-// ...
-// [archive0 blocksn]
 func (whisper *Whisper) readHeaderCompressed() (err error) {
 	if _, err := whisper.file.Seek(int64(len(compressedMagicString)), 0); err != nil {
 		return err
@@ -226,11 +215,9 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 		arc.cblock.crc32 = uint32(unpackInt(b[offset : offset+IntSize]))
 		offset += IntSize
 
-		arc.stats.extend.block = uint32(unpackInt(b[offset : offset+IntSize]))
-		offset += IntSize
-		arc.stats.extend.pointSize = uint32(unpackInt(b[offset : offset+IntSize]))
-		offset += IntSize
 		arc.stats.discard.oldInterval = uint32(unpackInt(b[offset : offset+IntSize]))
+		offset += IntSize
+		arc.stats.extended = uint32(unpackInt(b[offset : offset+IntSize]))
 		offset += IntSize
 
 		whisper.archives[i] = &arc
@@ -547,7 +534,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 				}
 				msg += fmt.Sprintf("%s:%v->%v ", ret, ret.avgCompressedPointSize, avgPointSize)
 				ret.avgCompressedPointSize = avgPointSize
-				arc.stats.extend.pointSize++
+				arc.stats.extended++
 			}
 		}
 
