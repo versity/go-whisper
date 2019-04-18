@@ -188,9 +188,6 @@ type Whisper struct {
 // Wrappers for whisper.file operations
 func (whisper *Whisper) fileWriteAt(b []byte, off int64) error {
 	_, err := whisper.file.WriteAt(b, off)
-	if err != nil {
-		panic(err)
-	}
 	return err
 }
 
