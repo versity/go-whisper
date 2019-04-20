@@ -446,15 +446,6 @@ func (archive *archiveInfo) getBufferByUnit(unit int) []byte {
 	return archive.buffer[lb:ub]
 }
 
-func (whisper *Whisper) getNextArchive(higher *archiveInfo) *archiveInfo {
-	for i, archive := range whisper.archives[:len(whisper.archives)-1] {
-		if archive == higher {
-			return whisper.archives[i+1]
-		}
-	}
-	return nil
-}
-
 func (archive *archiveInfo) appendToBlockAndRotate(dps []dataPoint) error {
 	whisper := archive.whisper // TODO: optimize away?
 
