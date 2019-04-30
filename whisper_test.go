@@ -155,6 +155,9 @@ func TestCreateCreatesFile(t *testing.T) {
 
 	// test size
 	info, err := os.Stat(path)
+	if err != nil {
+		t.Error(err)
+	}
 	if info.Size() != 4156 {
 		t.Fatalf("File size is incorrect, expected %v got %v", 4156, info.Size())
 	}
@@ -371,6 +374,9 @@ func TestFetchEmptyTimeseries(t *testing.T) {
 
 	now := int(time.Now().Unix())
 	result, err := whisper.Fetch(now-3, now)
+	if err != nil {
+		t.Error(err)
+	}
 	for _, point := range result.Points() {
 		if !math.IsNaN(point.Value) {
 			t.Fatalf("Expecting NaN values got '%v'", point.Value)
@@ -462,6 +468,9 @@ func BenchmarkFairCreateUpdateFetch(b *testing.B) {
 
 		for i := 0; i < secondsAgo; i++ {
 			whisper, err = Open(path)
+			if err != nil {
+				b.Fatalf("Unexpected error for %v: %v", i, err)
+			}
 			err = whisper.Update(currentValue, now-secondsAgo+i)
 			if err != nil {
 				b.Fatalf("Unexpected error for %v: %v", i, err)
@@ -474,6 +483,9 @@ func BenchmarkFairCreateUpdateFetch(b *testing.B) {
 		untilTime = fromTime + 1000
 
 		whisper, err = Open(path)
+		if err != nil {
+			b.Error(err)
+		}
 		whisper.Fetch(fromTime, untilTime)
 		whisper.Close()
 		tearDown()

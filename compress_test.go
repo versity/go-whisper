@@ -537,8 +537,6 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 				t.Error(err)
 			}
 			t.Logf("compression ratio %s: %.2f%%\n", input.name, float64(cmp.Size()*100)/float64(std.Size()))
-
-			return
 		})
 	}
 }

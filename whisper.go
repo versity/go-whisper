@@ -766,14 +766,6 @@ func (whisper *Whisper) archiveUpdateMany(archive *archiveInfo, points []*TimeSe
 	return nil
 }
 
-func (archive *archiveInfo) totalPoints() (sum int) {
-	for _, b := range archive.blockRanges {
-		sum += b.count
-	}
-	sum += len(unpackDataPointsStrict(archive.buffer))
-	return sum
-}
-
 func extractPoints(points []*TimeSeriesPoint, now int, maxRetention int) (currentPoints []*TimeSeriesPoint, remainingPoints []*TimeSeriesPoint) {
 	maxAge := now - maxRetention
 	for i, point := range points {

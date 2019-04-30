@@ -336,12 +336,6 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 	return dst, nil
 }
 
-func (archive *archiveInfo) getBufferRange() (start, end int) {
-	start = unpackInt(archive.buffer)
-	points := archive.bufferSize / PointSize
-	return start, start + points*archive.secondsPerPoint
-}
-
 func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points []*TimeSeriesPoint) error {
 	alignedPoints := alignPoints(archive, points)
 
@@ -1377,7 +1371,7 @@ func (mf *memFile) WriteAt(b []byte, off int64) (n int, err error) {
 	if n < len(b) {
 		err = io.EOF
 	}
-	return n, nil
+	return
 }
 
 func (mf *memFile) Read(b []byte) (n int, err error) {
@@ -1391,7 +1385,7 @@ func (mf *memFile) Read(b []byte) (n int, err error) {
 func (mf *memFile) Write(b []byte) (n int, err error) {
 	n, err = mf.WriteAt(b, mf.offset)
 	mf.offset += int64(n)
-	return n, nil
+	return
 }
 
 func (mf *memFile) dumpOnDisk(fpath string) error { return ioutil.WriteFile(fpath, mf.data, 0644) }
