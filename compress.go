@@ -634,7 +634,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 // 	    XORed value.
 
 func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written int, left []dataPoint, rotate bool) {
-	var bw BitsWriter
+	var bw bitsWriter
 	bw.buf = buf
 	bw.bitPos = a.cblock.lastByteBitPos
 
@@ -877,13 +877,13 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 	return
 }
 
-type BitsWriter struct {
+type bitsWriter struct {
 	buf    []byte
 	index  int // index
 	bitPos int // 0 indexed
 }
 
-func (bw *BitsWriter) isFull() bool {
+func (bw *bitsWriter) isFull() bool {
 	return bw.index+1 >= len(bw.buf)
 }
 
@@ -891,7 +891,7 @@ func mask(l int) uint {
 	return (1 << uint(l)) - 1
 }
 
-func (bw *BitsWriter) Write(lenb int, data uint64) {
+func (bw *bitsWriter) Write(lenb int, data uint64) {
 	buf := make([]byte, 8)
 	switch {
 	case lenb <= 8:
@@ -950,7 +950,7 @@ func (bw *BitsWriter) Write(lenb int, data uint64) {
 }
 
 func (a *archiveInfo) ReadFromBlock(buf []byte, dst []dataPoint, start, end int) ([]dataPoint, int, error) {
-	var br BitsReader
+	var br bitsReader
 	br.buf = buf
 	br.bitPos = 7
 	br.current = PointSize
@@ -1123,14 +1123,14 @@ readloop:
 	return dst, endOffset, nil
 }
 
-type BitsReader struct {
+type bitsReader struct {
 	buf     []byte
 	current int
 	bitPos  int // 0 indexed
 	badRead bool
 }
 
-func (br *BitsReader) trailingDebug() (start, end int, data []byte) {
+func (br *bitsReader) trailingDebug() (start, end int, data []byte) {
 	start = br.current - 1
 	if br.current == 0 {
 		start = 0
@@ -1143,7 +1143,7 @@ func (br *BitsReader) trailingDebug() (start, end int, data []byte) {
 	return
 }
 
-func (br *BitsReader) Peek(c int) byte {
+func (br *bitsReader) Peek(c int) byte {
 	if br.current >= len(br.buf) {
 		return 0
 	}
@@ -1160,9 +1160,9 @@ func (br *BitsReader) Peek(c int) byte {
 	return b
 }
 
-func (br *BitsReader) Read(c int) uint64 {
+func (br *bitsReader) Read(c int) uint64 {
 	if c > 64 {
-		panic("BitsReader can't read more than 64 bits")
+		panic("bitsReader can't read more than 64 bits")
 	}
 
 	var data uint64
@@ -1201,7 +1201,7 @@ func (br *BitsReader) Read(c int) uint64 {
 }
 
 func dumpBits(data ...uint64) string {
-	var bw BitsWriter
+	var bw bitsWriter
 	bw.buf = make([]byte, 16)
 	bw.bitPos = 7
 	var l uint64

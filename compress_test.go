@@ -21,11 +21,11 @@ import (
 func TestBitsReadWrite(t *testing.T) {
 	buf := make([]byte, 256)
 
-	var bw BitsWriter
+	var bw bitsWriter
 	bw.buf = buf
 	bw.bitPos = 7
 
-	var br BitsReader
+	var br bitsReader
 	br.buf = buf
 	br.bitPos = 7
 
