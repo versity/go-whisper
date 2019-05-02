@@ -63,7 +63,11 @@ func TestParseRetentionDefs(t *testing.T) {
 }
 
 func TestSortRetentions(t *testing.T) {
-	retentions := Retentions{{300, 12}, {60, 30}, {1, 300}}
+	retentions := Retentions{
+		{secondsPerPoint: 300, numberOfPoints: 12},
+		{secondsPerPoint: 60, numberOfPoints: 30},
+		{secondsPerPoint: 1, numberOfPoints: 300},
+	}
 	sort.Sort(retentionsByPrecision{retentions})
 	if retentions[0].secondsPerPoint != 1 {
 		t.Fatalf("Retentions array is not sorted")
@@ -77,7 +81,11 @@ func setUpCreate() (path string, fileExists func(string) bool, archiveList Reten
 		fi, _ := os.Lstat(path)
 		return fi != nil
 	}
-	archiveList = Retentions{{1, 300}, {60, 30}, {300, 12}}
+	archiveList = Retentions{
+		{secondsPerPoint: 1, numberOfPoints: 300},
+		{secondsPerPoint: 60, numberOfPoints: 30},
+		{secondsPerPoint: 300, numberOfPoints: 12},
+	}
 	tearDown = func() {
 		os.Remove(path)
 	}
@@ -147,6 +155,9 @@ func TestCreateCreatesFile(t *testing.T) {
 
 	// test size
 	info, err := os.Stat(path)
+	if err != nil {
+		t.Error(err)
+	}
 	if info.Size() != 4156 {
 		t.Fatalf("File size is incorrect, expected %v got %v", 4156, info.Size())
 	}
@@ -166,7 +177,7 @@ func TestCreateFileAlreadyExists(t *testing.T) {
 func TestCreateFileInvalidRetentionDefs(t *testing.T) {
 	path, _, retentions, tearDown := setUpCreate()
 	// Add a small retention def on the end
-	retentions = append(retentions, &Retention{1, 200})
+	retentions = append(retentions, &Retention{secondsPerPoint: 1, numberOfPoints: 200})
 	_, err := Create(path, retentions, Average, 0.5)
 	if err == nil {
 		t.Fatalf("Invalid retention definitions should cause create to fail.")
@@ -178,7 +189,7 @@ func TestOpenFile(t *testing.T) {
 	path, _, retentions, tearDown := setUpCreate()
 	whisper1, err := Create(path, retentions, Average, 0.5)
 	if err != nil {
-		fmt.Errorf("Failed to create: %v", err)
+		t.Errorf("Failed to create: %v", err)
 	}
 
 	// write some points
@@ -288,7 +299,7 @@ func TestCheckEmpty(t *testing.T) {
 	path, _, retentions, tearDown := setUpCreate()
 	whisper, err = Create(path, retentions, Average, 0.5)
 	if err != nil {
-		fmt.Errorf("Failed to create: %v", err)
+		t.Errorf("Failed to create: %v", err)
 	}
 	defer whisper.Close()
 	now := int(time.Now().Unix())
@@ -363,6 +374,9 @@ func TestFetchEmptyTimeseries(t *testing.T) {
 
 	now := int(time.Now().Unix())
 	result, err := whisper.Fetch(now-3, now)
+	if err != nil {
+		t.Error(err)
+	}
 	for _, point := range result.Points() {
 		if !math.IsNaN(point.Value) {
 			t.Fatalf("Expecting NaN values got '%v'", point.Value)
@@ -454,6 +468,9 @@ func BenchmarkFairCreateUpdateFetch(b *testing.B) {
 
 		for i := 0; i < secondsAgo; i++ {
 			whisper, err = Open(path)
+			if err != nil {
+				b.Fatalf("Unexpected error for %v: %v", i, err)
+			}
 			err = whisper.Update(currentValue, now-secondsAgo+i)
 			if err != nil {
 				b.Fatalf("Unexpected error for %v: %v", i, err)
@@ -466,6 +483,9 @@ func BenchmarkFairCreateUpdateFetch(b *testing.B) {
 		untilTime = fromTime + 1000
 
 		whisper, err = Open(path)
+		if err != nil {
+			b.Error(err)
+		}
 		whisper.Fetch(fromTime, untilTime)
 		whisper.Close()
 		tearDown()
