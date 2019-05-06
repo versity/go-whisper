@@ -662,6 +662,10 @@ func reversePoints(points []*TimeSeriesPoint) {
 var Now = func() time.Time { return time.Now() }
 
 func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) (err error) {
+	return whisper.UpdateManyForArchive(points, -1)
+}
+
+func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, archiveSpecifier int) (err error) {
 	// recover panics and return as error
 	defer func() {
 		if e := recover(); e != nil {
@@ -678,6 +682,10 @@ func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) (err error) {
 	var currentPoints []*TimeSeriesPoint
 	for i := 0; i < len(whisper.archives); i++ {
 		archive := whisper.archives[i]
+		if archiveSpecifier != -1 && archiveSpecifier != archive.MaxRetention() {
+			continue
+		}
+
 		currentPoints, points = extractPoints(points, now, archive.MaxRetention())
 
 		if len(currentPoints) == 0 {
@@ -1292,6 +1300,14 @@ func (ts *TimeSeries) Points() []TimeSeriesPoint {
 	points := make([]TimeSeriesPoint, len(ts.values))
 	for i, value := range ts.values {
 		points[i] = TimeSeriesPoint{Time: ts.fromTime + ts.step*i, Value: value}
+	}
+	return points
+}
+
+func (ts *TimeSeries) PointPointers() []*TimeSeriesPoint {
+	points := make([]*TimeSeriesPoint, len(ts.values))
+	for i, value := range ts.values {
+		points[i] = &TimeSeriesPoint{Time: ts.fromTime + ts.step*i, Value: value}
 	}
 	return points
 }
