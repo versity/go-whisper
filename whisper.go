@@ -159,6 +159,7 @@ type file interface {
 	Name() string
 	Close() error
 	Write(b []byte) (n int, err error)
+	Truncate(size int64) error
 }
 
 /*
