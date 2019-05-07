@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 	"unsafe"
-
-	"github.com/kr/pretty"
 )
 
 var (
@@ -955,7 +953,6 @@ func (a *archiveInfo) ReadFromBlock(buf []byte, dst []dataPoint, start, end int)
 	}
 
 	var pn1, pn2 *dataPoint = &p, &p
-	var debugindex int
 	var exitByEOB bool
 
 readloop:
@@ -1103,10 +1100,6 @@ readloop:
 			}
 			break
 		}
-	}
-
-	if debugindex > 0 {
-		pretty.Println(dst[debugindex-10 : debugindex+10])
 	}
 
 	endOffset := br.current
