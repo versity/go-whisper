@@ -96,6 +96,13 @@ func (whisper *Whisper) Dump(all, showDecompressionInfo bool) {
 }
 
 func (archive *archiveInfo) dumpInfoCompressed() {
+	if archive.aggregationSpec != nil {
+		if archive.aggregationSpec.Method == Percentile {
+			fmt.Printf("aggregation:       p%.2f\n", archive.aggregationSpec.Percentile)
+		} else {
+			fmt.Printf("aggregation:       %s\n", archive.aggregationSpec.Method)
+		}
+	}
 	fmt.Printf("retention:         %s\n", archive.Retention)
 	fmt.Printf("number_of_points:  %d\n", archive.numberOfPoints)
 	fmt.Printf("retention:         %s\n", archive.Retention)
@@ -136,6 +143,14 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 		dps := unpackDataPoints(arc.buffer)
 		for i, p := range dps {
 			fmt.Printf("  % 4d %d: %f\n", i, p.interval, p.value)
+		}
+	}
+
+	if arc.aggregationSpec != nil {
+		if arc.aggregationSpec.Method == Percentile {
+			fmt.Printf("aggregation: p%.2f\n", arc.aggregationSpec.Percentile)
+		} else {
+			fmt.Printf("aggregation: %s\n", arc.aggregationSpec.Method)
 		}
 	}
 
