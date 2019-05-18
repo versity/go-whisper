@@ -554,7 +554,7 @@ func TestCompressTo(t *testing.T) {
 		},
 		Average,
 		0,
-		&Options{Compressed: false, PointsPerBlock: 7200},
+		&Options{Compressed: false, PointsPerBlock: 7200, InMemory: true},
 	)
 	if err != nil {
 		panic(err)
@@ -574,7 +574,7 @@ func TestCompressTo(t *testing.T) {
 				Value: float64(rand.Intn(100000)),
 			})
 		}
-		whisper, err = OpenWithOptions(fpath, &Options{})
+		whisper, err = OpenWithOptions(fpath, &Options{InMemory: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -585,6 +585,7 @@ func TestCompressTo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	whisper.file.(*memFile).dumpOnDisk(fpath)
 
 	whisper, err = OpenWithOptions(fpath, &Options{})
 	if err != nil {
@@ -676,6 +677,132 @@ func TestRandomReadWrite(t *testing.T) {
 	if err := cwhisper.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestFillCompressed(t *testing.T) {
+	fpath := "fill.wsp"
+	os.Remove(fpath)
+	os.Remove(fpath + ".cwsp")
+
+	standard, err := CreateWithOptions(
+		fpath,
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 172800},   // 1s:2d
+			{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
+			{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
+		},
+		Average,
+		0,
+		&Options{Compressed: false, PointsPerBlock: 7200, InMemory: true},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	points := []*TimeSeriesPoint{}
+	twoYearsAgo := Now().Add(time.Hour * 24 * 365 * -2)
+	for i := 0; i < 2*365*24-28*24; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(twoYearsAgo.Add(time.Hour * time.Duration(i)).Unix()),
+			Value: rand.NormFloat64(),
+		})
+	}
+	if err := standard.UpdateMany(points); err != nil {
+		t.Error(err)
+	}
+
+	points = []*TimeSeriesPoint{}
+	oneMonthAgo := Now().Add(time.Hour * 24 * -28)
+	for i := 0; i < 28*24*60-2*24*60; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(oneMonthAgo.Add(time.Minute * time.Duration(i)).Unix()),
+			Value: rand.NormFloat64(),
+		})
+	}
+	if err := standard.UpdateMany(points); err != nil {
+		t.Error(err)
+	}
+
+	compressed, err := CreateWithOptions(
+		fpath+".cwsp",
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 172800, avgCompressedPointSize: 9},   // 1s:2d
+			{secondsPerPoint: 60, numberOfPoints: 40320, avgCompressedPointSize: 9},   // 1m:28d
+			{secondsPerPoint: 3600, numberOfPoints: 17520, avgCompressedPointSize: 9}, // 1h:2y
+		},
+		Average,
+		0,
+		&Options{Compressed: true, PointsPerBlock: 7200, InMemory: true},
+	)
+	if err != nil {
+		panic(err)
+	}
+	points = []*TimeSeriesPoint{}
+	twoDaysAgo := Now().Add(time.Hour * 24 * -2)
+	for i := 0; i < 60*60*24*2; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(twoDaysAgo.Add(time.Second * time.Duration(i)).Unix()),
+			Value: rand.NormFloat64(),
+		})
+	}
+	if err := compressed.UpdateMany(points); err != nil {
+		t.Error(err)
+	}
+
+	if err := compressed.file.(*memFile).dumpOnDisk(fpath + ".original.cwsp"); err != nil {
+		t.Error(err)
+	}
+
+	if err := compressed.FillCompressed(standard); err != nil {
+		t.Error(err)
+	}
+
+	if err := compressed.file.(*memFile).dumpOnDisk(fpath + ".cwsp"); err != nil {
+		t.Error(err)
+	}
+	if err := standard.file.(*memFile).dumpOnDisk(fpath); err != nil {
+		t.Error(err)
+	}
+
+	compare := func(w1, w2 *Whisper, from, until int) {
+		valsc, err := w1.Fetch(from, until)
+		if err != nil {
+			t.Error(err)
+		}
+		valss, err := w2.Fetch(from, until)
+		if err != nil {
+			t.Error(err)
+		}
+		var diff, same int
+		for i := 0; i < len(valsc.values); i++ {
+			vc := valsc.values[i]
+			vs := valss.values[i]
+			if math.IsNaN(vc) && math.IsNaN(vs) {
+				same++
+			} else if vc != vs {
+				t.Errorf("%d/%d %d: %v != %v\n", i, len(valsc.values), valsc.fromTime+i*valsc.step, vc, vs)
+				diff++
+			} else {
+				same++
+			}
+		}
+		if diff > 0 {
+			t.Errorf("diff = %d", diff)
+			t.Errorf("same = %d", same)
+		}
+	}
+
+	t.Log("comparing 2 years archive")
+	compare(compressed, standard, int(twoYearsAgo.Unix()), int(Now().Add(time.Hour*24*-28).Unix()))
+	t.Log("comparing 1 month archive")
+	compare(compressed, standard, int(oneMonthAgo.Add(time.Hour).Unix()), int(Now().Add(time.Hour*24*-2-time.Hour).Unix()))
+
+	oldCompressed, err := OpenWithOptions(fpath+".original.cwsp", &Options{})
+	if err != nil {
+		t.Error(err)
+	}
+	t.Log("comparing 2 days archive")
+	compare(compressed, oldCompressed, int(Now().Add(time.Hour*24*-2+time.Hour).Unix()), int(Now().Unix()))
 }
 
 func BenchmarkWriteCompressed(b *testing.B) {
