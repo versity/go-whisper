@@ -92,11 +92,6 @@ type MixAggregationSpec struct {
 	Percentile float32
 }
 
-func ParseMixAggregationSpecs(spec string) []MixAggregationSpec {
-	// TODO
-	return nil
-}
-
 func unitMultiplier(s string) (int, error) {
 	switch {
 	case strings.HasPrefix(s, "s"):
@@ -236,6 +231,9 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 func CreateWithOptions(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
 	if options == nil {
 		options = &Options{}
+	}
+	if aggregationMethod == Mix && !options.Compressed {
+		return nil, errors.New("mix aggregation method is currently supported only for compressed format")
 	}
 	sort.Sort(retentionsByPrecision{retentions})
 	if err = validateRetentions(retentions); err != nil {
