@@ -25,7 +25,8 @@ func main() {
 		os.Stdout = temp
 	}
 
-	db, err := whisper.OpenWithOptions(flag.Args()[0], &whisper.Options{})
+	oflag := os.O_RDONLY
+	db, err := whisper.OpenWithOptions(flag.Args()[0], &whisper.Options{OpenFileFlag: &oflag})
 	if err != nil {
 		panic(err)
 	}

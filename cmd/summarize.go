@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -32,7 +33,8 @@ func main() {
 	}
 
 	path := flag.Args()[0]
-	db, err := whisper.OpenWithOptions(path, &whisper.Options{})
+	oflag := os.O_RDONLY
+	db, err := whisper.OpenWithOptions(path, &whisper.Options{OpenFileFlag: &oflag})
 	if err != nil {
 		panic(err)
 	}

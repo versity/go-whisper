@@ -71,6 +71,7 @@ type Options struct {
 	PointsPerBlock int
 	PointSize      float32
 	InMemory       bool
+	OpenFileFlag   *int
 }
 
 func unitMultiplier(s string) (int, error) {
@@ -388,7 +389,11 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 	if options.InMemory {
 		file = newMemFile(path)
 	} else {
-		file, err = os.OpenFile(path, os.O_RDWR, 0666)
+		flag := os.O_RDWR
+		if options.OpenFileFlag != nil {
+			flag = *options.OpenFileFlag
+		}
+		file, err = os.OpenFile(path, flag, 0666)
 	}
 	if err != nil {
 		return
