@@ -284,6 +284,13 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 		archive.offset = offset
 
 		if whisper.compressed {
+			if math.IsNaN(float64(archive.avgCompressedPointSize)) || archive.avgCompressedPointSize <= 0 {
+				archive.avgCompressedPointSize = avgCompressedPointSize
+			}
+			if archive.avgCompressedPointSize > MaxCompressedPointSize {
+				archive.avgCompressedPointSize = MaxCompressedPointSize
+			}
+
 			archive.cblock.lastByteBitPos = 7
 			archive.blockSize = int(math.Ceil(float64(whisper.pointsPerBlock)*float64(archive.avgCompressedPointSize))) + endOfBlockSize
 			archive.blockRanges = make([]blockRange, archive.blockCount)
