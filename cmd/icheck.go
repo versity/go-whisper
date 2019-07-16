@@ -14,7 +14,8 @@ func init() {
 func main() {
 	file1 := os.Args[1]
 
-	db1, err := whisper.OpenWithOptions(file1, &whisper.Options{})
+	oflag := os.O_RDONLY
+	db1, err := whisper.OpenWithOptions(file1, &whisper.Options{OpenFileFlag: &oflag})
 	if err != nil {
 		panic(err)
 	}

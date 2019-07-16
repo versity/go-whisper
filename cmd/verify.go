@@ -48,12 +48,13 @@ func main() {
 
 	file1 := flag.Args()[0]
 	file2 := flag.Args()[1]
+	oflag := os.O_RDONLY
 
-	db1, err := whisper.OpenWithOptions(file1, &whisper.Options{})
+	db1, err := whisper.OpenWithOptions(file1, &whisper.Options{OpenFileFlag: &oflag})
 	if err != nil {
 		panic(err)
 	}
-	db2, err := whisper.OpenWithOptions(file2, &whisper.Options{})
+	db2, err := whisper.OpenWithOptions(file2, &whisper.Options{OpenFileFlag: &oflag})
 	if err != nil {
 		panic(err)
 	}

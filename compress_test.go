@@ -805,6 +805,81 @@ func TestFillCompressed(t *testing.T) {
 	compare(compressed, oldCompressed, int(Now().Add(time.Hour*24*-2+time.Hour).Unix()), int(Now().Unix()))
 }
 
+func TestSanitizeAvgCompressedPointSizeOnCreate(t *testing.T) {
+	var cases = []struct {
+		rets   []*Retention
+		expect float32
+	}{
+		{
+			rets: []*Retention{
+				{secondsPerPoint: 1, numberOfPoints: 100, avgCompressedPointSize: math.Float32frombits(0xffc00000)}, // 32bits nan
+				{secondsPerPoint: 5, numberOfPoints: 100},
+			},
+			expect: avgCompressedPointSize,
+		},
+		{
+			rets: []*Retention{
+				{secondsPerPoint: 1, numberOfPoints: 100, avgCompressedPointSize: float32(math.NaN())}, // 62 bits nan
+				{secondsPerPoint: 5, numberOfPoints: 100},
+			},
+			expect: avgCompressedPointSize,
+		},
+		{
+			rets: []*Retention{
+				{secondsPerPoint: 1, numberOfPoints: 100, avgCompressedPointSize: 0},
+				{secondsPerPoint: 5, numberOfPoints: 100},
+			},
+			expect: avgCompressedPointSize,
+		},
+		{
+			rets: []*Retention{
+				{secondsPerPoint: 1, numberOfPoints: 100, avgCompressedPointSize: -10},
+				{secondsPerPoint: 5, numberOfPoints: 100},
+			},
+			expect: avgCompressedPointSize,
+		},
+		{
+			rets: []*Retention{
+				{secondsPerPoint: 1, numberOfPoints: 100, avgCompressedPointSize: 65536},
+				{secondsPerPoint: 5, numberOfPoints: 100},
+			},
+			expect: MaxCompressedPointSize,
+		},
+	}
+	for _, c := range cases {
+		fpath := "extend.whisper"
+		os.Remove(fpath)
+		whisper, err := CreateWithOptions(
+			fpath,
+			c.rets,
+			Sum,
+			0.7,
+			&Options{Compressed: true, PointsPerBlock: 7200},
+		)
+		if err != nil {
+			panic(err)
+		}
+		whisper.Close()
+
+		whisper, err = OpenWithOptions(fpath, &Options{Compressed: true, PointsPerBlock: 7200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := whisper.archives[0].avgCompressedPointSize, c.expect; got != want {
+			t.Errorf("whisper.archives[0].avgCompressedPointSize = %f; want %f", got, want)
+		}
+	}
+}
+
+func TestEstimatePointSize(t *testing.T) {
+	size := estimatePointSize([]dataPoint{}, &Retention{secondsPerPoint: 10, numberOfPoints: 17280}, DefaultPointsPerBlock)
+	if got, want := size, avgCompressedPointSize; got != want {
+		t.Errorf("size = %f; want %f", got, want)
+	}
+
+	return
+}
+
 func BenchmarkWriteCompressed(b *testing.B) {
 	fpath := "benchmark_write.cwsp"
 	os.Remove(fpath)
