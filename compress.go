@@ -14,6 +14,8 @@ import (
 	"unsafe"
 )
 
+// TODO: take care of unhandled/ignored errors (put them in a nonfatal errors field?)
+
 var (
 	CompressedMetadataSize     = 28 + FreeCompressedMetadataSize
 	FreeCompressedMetadataSize = 16
@@ -45,6 +47,16 @@ var (
 	debugExtend    bool
 
 	avgCompressedPointSize float32 = 2
+
+	// Chosen randomly and just as a safe guard, consider using 7200 datapoints per
+	// block, one only need 24 blocks for 2 days of data points.
+	MaxBlockCount = 4096
+	// Chosen randomly and just as a safe guard, consider using 1s:2d,1m:28d as an
+	// example, only 2880 bytes needed for the buffer.
+	MaxBufferSize = 4096 * PointSize
+	// Chosen randomly and just as a safe guard, consider using 7200 datapoints per
+	// block, only 100800 bytes needed for one block.
+	MaxBlockSize = 2 * 1024 * 1024 // 2MB
 )
 
 // In worst case scenario all data points would required 2 bytes more space
@@ -229,6 +241,13 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 	whisper.initMetaInfo()
 
 	for i, arc := range whisper.archives {
+		// Sanity check for avoiding crashing programs because of memory exhaustion,
+		// do not continue with unreasonable blockCount size (caused by bugs or
+		// corruptions).
+		if arc.blockCount < 0 || arc.blockCount > MaxBlockCount {
+			return fmt.Errorf("Block count too big in archive %d: %d", i, arc.blockCount)
+		}
+
 		b := make([]byte, BlockRangeSize*arc.blockCount)
 		readed, err = whisper.file.Read(b)
 		if err != nil || readed != BlockRangeSize*arc.blockCount {
@@ -255,6 +274,10 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 		if !arc.hasBuffer() {
 			continue
 		}
+		if arc.bufferSize < 0 || arc.bufferSize > MaxBufferSize {
+			return fmt.Errorf("Buffer size too big in archive %d: %d", i, arc.bufferSize)
+		}
+
 		arc.buffer = make([]byte, arc.bufferSize)
 
 		readed, err = whisper.file.Read(arc.buffer)
@@ -316,6 +339,10 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 	var dst []dataPoint
 	for _, block := range archive.getSortedBlockRanges() {
 		if block.end >= int(start) && int(end) >= block.start {
+			if archive.blockSize < 0 || archive.blockSize > MaxBlockSize {
+				return nil, fmt.Errorf("fetchCompressed: block size too big: %d", archive.blockSize)
+			}
+
 			buf := make([]byte, archive.blockSize)
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 				return nil, fmt.Errorf("fetchCompressed: %s", err)

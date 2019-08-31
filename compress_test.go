@@ -876,8 +876,6 @@ func TestEstimatePointSize(t *testing.T) {
 	if got, want := size, avgCompressedPointSize; got != want {
 		t.Errorf("size = %f; want %f", got, want)
 	}
-
-	return
 }
 
 func BenchmarkWriteCompressed(b *testing.B) {
