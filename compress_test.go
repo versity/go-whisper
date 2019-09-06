@@ -965,7 +965,7 @@ func TestEstimatePointSize(t *testing.T) {
 	}
 }
 
-func TestFillCompressedByMix(t *testing.T) {
+func TestFillMixCompressed(t *testing.T) {
 	srcPath := "fill-mix.src.cwsp"
 	dstPath := "fill-mix.dst.cwsp"
 	os.Remove(srcPath)

@@ -103,7 +103,8 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 			b[i] = byte(archive.aggregationSpec.Method)
 			i += ByteSize
 			i += packFloat32(b, archive.aggregationSpec.Percentile, i)
-			mixSpec = 5
+			const specSize = 5
+			mixSpec = specSize
 		}
 
 		i += packInt(b, archive.cblock.index, i)
@@ -549,7 +550,33 @@ func (whisper *Whisper) extendIfNeeded() error {
 	var rets []*Retention
 	var extend bool
 	var msg string
-	for _, arc := range whisper.archives {
+
+	var mixPointSizes map[Retention]map[MixAggregationSpec]float32
+	var setMPS = func(ret *Retention, spec MixAggregationSpec, size float32) {
+		ret.avgCompressedPointSize = 0
+		m, ok := mixPointSizes[*ret]
+		if !ok {
+			m = map[MixAggregationSpec]float32{}
+			mixPointSizes[*ret] = m
+		}
+		m[spec] = size
+	}
+
+	var mixSpecs []MixAggregationSpec
+	if whisper.aggregationMethod == Mix && len(whisper.archives) > 1 {
+		mixPointSizes = map[Retention]map[MixAggregationSpec]float32{}
+		for i, arc := range whisper.archives[1:] {
+			// Compare with previous archive to see if we have collected all
+			// specs because mix specs are the same for all rentions except the
+			// base.
+			if len(mixSpecs) > 1 && arc.Retention != whisper.archives[i] {
+				break
+			}
+			mixSpecs = append(mixSpecs, *arc.aggregationSpec)
+		}
+	}
+
+	for i, arc := range whisper.archives {
 		ret := &Retention{
 			secondsPerPoint:        arc.secondsPerPoint,
 			numberOfPoints:         arc.numberOfPoints,
@@ -571,14 +598,21 @@ func (whisper *Whisper) extendIfNeeded() error {
 			avgPointSize := float32(totalBlocks*arc.blockSize) / float32(totalPoints)
 			if avgPointSize > arc.avgCompressedPointSize {
 				extend = true
+				arc.stats.extended++
+
 				if avgPointSize-arc.avgCompressedPointSize < 0.618 {
 					avgPointSize += 0.618
 				}
 				if debugExtend {
 					msg += fmt.Sprintf("%s:%v->%v ", ret, ret.avgCompressedPointSize, avgPointSize)
 				}
-				ret.avgCompressedPointSize = avgPointSize
-				arc.stats.extended++
+				if whisper.aggregationMethod == Mix {
+					setMPS(ret, *arc.aggregationSpec, avgPointSize)
+				} else {
+					ret.avgCompressedPointSize = avgPointSize
+				}
+			} else if whisper.aggregationMethod == Mix {
+				setMPS(ret, *arc.aggregationSpec, arc.avgCompressedPointSize)
 			}
 		}
 
@@ -599,7 +633,12 @@ func (whisper *Whisper) extendIfNeeded() error {
 	nwhisper, err := CreateWithOptions(
 		whisper.file.Name()+".extend", rets,
 		whisper.aggregationMethod, whisper.xFilesFactor,
-		&Options{Compressed: true, PointsPerBlock: DefaultPointsPerBlock, InMemory: whisper.opts.InMemory},
+		&Options{
+			Compressed: true, PointsPerBlock: DefaultPointsPerBlock,
+			InMemory:            whisper.opts.InMemory,
+			MixAggregationSpecs: mixSpecs,
+			// avgCompressedPointSizes
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("extend: %s", err)
@@ -1505,10 +1544,14 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 			InMemory:       true, // need to close file if switch to non in-memory
 		},
 	)
+	defer func() {
+		if newDst.file != nil {
+			releaseMemFile(newDst.file.Name())
+		}
+	}()
 	if err != nil {
 		return err
 	}
-	defer releaseMemFile(newDst.file.Name())
 
 	for i := len(dstw.archives) - 1; i >= 0; i-- {
 		points := pointsByArchives[i]

@@ -52,6 +52,8 @@ const (
 	Percentile // only used in archive header
 )
 
+var MaxFileSize = 10 * 1024 * 1024 // 10MB
+
 func (am AggregationMethod) String() string {
 	switch am {
 	case Average:
@@ -85,6 +87,9 @@ type Options struct {
 	OpenFileFlag   *int
 
 	MixAggregationSpecs []MixAggregationSpec
+
+	// point sizes specified here has the highest priority
+	avgCompressedPointSizes map[Retention]map[MixAggregationSpec]struct{}
 }
 
 type MixAggregationSpec struct {
@@ -227,6 +232,8 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 	})
 }
 
+// TODO: add sanity checks for file size
+
 // CreateWithOptions is more customizable create function
 func CreateWithOptions(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
 	if options == nil {
@@ -288,7 +295,6 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	// Set the archive info
 	for i, retention := range retentions {
 		archive := &archiveInfo{Retention: *retention}
-
 		if archive.avgCompressedPointSize == 0 {
 			archive.avgCompressedPointSize = whisper.avgCompressedPointSize
 		}
@@ -300,6 +306,11 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 			for _, spec := range options.MixAggregationSpecs {
 				narchive := *archive
 				narchive.aggregationSpec = &MixAggregationSpec{Method: spec.Method, Percentile: spec.Percentile}
+
+				if options.avgCompressedPointSizes != nil && options.avgCompressedPointSizes[archive.Retention] != nil && options.avgCompressedPointSizes[archive.Retention][*narchive.aggregationSpec] > 0 {
+					narchive.avgCompressedPointSize = options.avgCompressedPointSizes[archive.Retention][*narchive.aggregationSpec]
+				}
+
 				whisper.archives = append(whisper.archives, &narchive)
 			}
 		} else {
@@ -319,14 +330,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 
 		if whisper.aggregationMethod != Mix || i == 0 {
 			archive := whisper.archives[i]
-
-			if math.IsNaN(float64(archive.avgCompressedPointSize)) || archive.avgCompressedPointSize <= 0 {
-				archive.avgCompressedPointSize = avgCompressedPointSize
-			}
-			if archive.avgCompressedPointSize > MaxCompressedPointSize {
-				archive.avgCompressedPointSize = MaxCompressedPointSize
-			}
-
+			archive.avgCompressedPointSize = sanitizePointSize(archive.avgCompressedPointSize)
 			archive.cblock.lastByteBitPos = 7
 			archive.blockSize = int(math.Ceil(float64(whisper.pointsPerBlock)*float64(archive.avgCompressedPointSize))) + endOfBlockSize
 			archive.blockRanges = make([]blockRange, archive.blockCount)
@@ -334,6 +338,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 			archive.offset = offset
 			offset += archive.blockSize * archive.blockCount
 
+			// add buffers to higer archive
 			if i > 0 {
 				size := archive.secondsPerPoint / whisper.archives[i-1].secondsPerPoint * PointSize * 2
 				whisper.archives[i-1].buffer = make([]byte, size)
@@ -344,6 +349,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 
 		for j := range options.MixAggregationSpecs {
 			archive := whisper.archives[1+(i-1)*len(options.MixAggregationSpecs)+j]
+			archive.avgCompressedPointSize = sanitizePointSize(archive.avgCompressedPointSize)
 			archive.cblock.lastByteBitPos = 7
 			archive.blockSize = int(math.Ceil(float64(whisper.pointsPerBlock)*float64(archive.avgCompressedPointSize))) + endOfBlockSize
 			archive.blockRanges = make([]blockRange, archive.blockCount)
@@ -380,6 +386,16 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	}
 
 	return whisper, nil
+}
+
+func sanitizePointSize(p float32) float32 {
+	if math.IsNaN(float64(p)) || p <= 0 {
+		p = avgCompressedPointSize
+	}
+	if p > MaxCompressedPointSize {
+		p = MaxCompressedPointSize
+	}
+	return p
 }
 
 func (whisper *Whisper) blockCount(archive *archiveInfo) int {
@@ -1233,7 +1249,7 @@ type Retention struct {
 
 	// for compressed whisper (internal)
 	avgCompressedPointSize float32
-	blockCount             int
+	blockCount             int // TODO: doesn't support mix aggregation
 }
 
 func (retention *Retention) MaxRetention() int {
