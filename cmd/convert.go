@@ -55,7 +55,7 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(0)
 	}
-	if err := os.MkdirAll(*homdDir, 0644); err != nil {
+	if err := os.MkdirAll(*homdDir, 0755); err != nil {
 		panic(err)
 	}
 
@@ -125,6 +125,7 @@ func onExit(convertingCount *int64, convertingFiles *sync.Map, progressc chan st
 		}
 		if len(progressc) > 0 {
 			fmt.Printf("exit: flushing progress records\n")
+			time.Sleep(time.Second)
 			continue
 		}
 		fmt.Printf("exit: progrem shutting down in 3 seconds\n")
@@ -188,7 +189,7 @@ func readProgress(db string) (files map[string]struct{}, err error) {
 func logProgress(progressDB string, progressc chan string) {
 	logf, err := os.OpenFile(progressDB, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		fmt.Printf("log: failed to open %s: %s\n", progressDB, err)
+		panic(fmt.Sprintf("log: failed to open %s: %s\n", progressDB, err))
 		return
 	}
 
