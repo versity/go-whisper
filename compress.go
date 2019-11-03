@@ -1440,7 +1440,7 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 		points = points[:lenp]
 
 		pointsByArchives[i] = points
-		rets[i].avgCompressedPointSize = estimatePointSize(points, rets[i], DefaultPointsPerBlock)
+		rets[i].avgCompressedPointSize = estimatePointSize(points, rets[i], rets[i].calculateSuitablePointsPerBlock(dstw.pointsPerBlock))
 	}
 
 	newDst, err := CreateWithOptions(
