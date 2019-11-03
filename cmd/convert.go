@@ -229,7 +229,8 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 		return nil
 	}
 
-	start := time.Now()
+	var start = time.Now()
+	var tmpPath = path + ".cwsp"
 	var oldSize int64
 	if stat, err := os.Stat(path); err == nil {
 		oldSize = stat.Size()
@@ -241,9 +242,13 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 			return
 		}
 
-		stat, err := os.Stat(path)
+		var cpath = path
+		if keepOriginal {
+			cpath = tmpPath
+		}
+		stat, err := os.Stat(cpath)
 		if err != nil {
-			fmt.Printf("convert: failed to stat new size of %s: %s\n", path, err)
+			fmt.Printf("convert: failed to stat new size of %s: %s\n", cpath, err)
 		}
 		newSize := stat.Size()
 		progressc <- fmt.Sprintf(
@@ -252,7 +257,6 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 		)
 	}()
 
-	tmpPath := path + ".cwsp"
 	os.Remove(tmpPath)
 	if err := db.CompressTo(tmpPath); err != nil {
 		return fmt.Errorf("convert: failed to compress %s: %s", path, err)
