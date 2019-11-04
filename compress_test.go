@@ -872,10 +872,42 @@ func TestSanitizeAvgCompressedPointSizeOnCreate(t *testing.T) {
 }
 
 func TestEstimatePointSize(t *testing.T) {
-	size := estimatePointSize([]dataPoint{}, &Retention{secondsPerPoint: 10, numberOfPoints: 17280}, DefaultPointsPerBlock)
-	if got, want := size, avgCompressedPointSize; got != want {
-		t.Errorf("size = %f; want %f", got, want)
+	cases := []struct {
+		input  []dataPoint
+		expect float32
+	}{
+		// 0 datapoints
+		{input: []dataPoint{}, expect: avgCompressedPointSize},
+		// not enough datapoints
+		{
+			input: []dataPoint{
+				{interval: 1543449600, value: 5},
+				{interval: 1543478400, value: 5},
+			},
+			expect: avgCompressedPointSize,
+		},
 	}
+	for _, c := range cases {
+		// not enough datapoints
+		size := estimatePointSize(c.input, &Retention{secondsPerPoint: 10, numberOfPoints: 17280}, DefaultPointsPerBlock)
+		if got, want := size, c.expect; got != want {
+			t.Errorf("size = %f; want %f", got, want)
+		}
+	}
+
+	// for i := 0; i < 500; i += 10 {
+	// 	var ds []dataPoint
+	// 	var start = 1543449600
+	// 	for j := 0; j < i; j++ {
+	// 		ds = append(ds, dataPoint{interval: start, value: rand.NormFloat64()})
+	// 		// ds = append(ds, dataPoint{interval: start, value: 10})
+	//
+	// 		start += 1
+	// 		// start += rand.Int()
+	// 	}
+	// 	size := estimatePointSize(ds, &Retention{secondsPerPoint: 10, numberOfPoints: 17280}, DefaultPointsPerBlock)
+	// 	fmt.Printf("%d: %f\n", i, size)
+	// }
 
 	return
 }
