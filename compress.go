@@ -9,6 +9,7 @@ import (
 	"math/bits"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -289,6 +290,8 @@ func (a *archiveInfo) blockOffset(blockIndex int) int {
 	return a.offset + blockIndex*a.blockSize
 }
 
+const maxInt = 1<<uint(strconv.IntSize-1) - 1
+
 func (archive *archiveInfo) getSortedBlockRanges() []blockRange {
 	brs := make([]blockRange, len(archive.blockRanges))
 	copy(brs, archive.blockRanges)
@@ -296,11 +299,11 @@ func (archive *archiveInfo) getSortedBlockRanges() []blockRange {
 	sort.SliceStable(brs, func(i, j int) bool {
 		istart := brs[i].start
 		if brs[i].start == 0 {
-			istart = math.MaxInt64
+			istart = maxInt
 		}
 		jstart := brs[j].start
 		if brs[j].start == 0 {
-			jstart = math.MaxInt64
+			jstart = maxInt
 		}
 
 		return istart < jstart
