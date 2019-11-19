@@ -624,6 +624,10 @@ func Test_aggregateSum(t *testing.T) {
 	test_aggregate(t, Sum, 15.0)
 }
 
+func Test_aggregateFirst(t *testing.T) {
+	test_aggregate(t, First, 1.0)
+}
+
 func Test_aggregateLast(t *testing.T) {
 	test_aggregate(t, Last, 4.0)
 }
