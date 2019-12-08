@@ -2,6 +2,7 @@ package whisper
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -291,23 +292,6 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 	return nil
 }
 
-type blockInfo struct {
-	index          int
-	crc32          uint32
-	p0, pn1, pn2   dataPoint // pn1/pn2: points at len(block_points) - 1/2
-	lastByte       byte
-	lastByteOffset int
-	lastByteBitPos int
-	count          int
-}
-
-type blockRange struct {
-	index      int
-	start, end int // start and end timestamps
-	count      int
-	crc32      uint32
-}
-
 func (a *archiveInfo) blockOffset(blockIndex int) int {
 	return a.offset + blockIndex*a.blockSize
 }
@@ -333,17 +317,27 @@ func (archive *archiveInfo) getSortedBlockRanges() []blockRange {
 	return brs
 }
 
-func (archive *archiveInfo) hasBuffer() bool {
-	return archive.bufferSize > 0
+func (archive *archiveInfo) getOverallRange() (from, until int) {
+	for _, b := range archive.blockRanges {
+		if from == 0 || from > b.start {
+			from = b.start
+		}
+		if b.end > until {
+			until = b.end
+		}
+	}
+	return
 }
+
+func (archive *archiveInfo) hasBuffer() bool { return archive.bufferSize > 0 }
 
 func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) ([]dataPoint, error) {
 	var dst []dataPoint
+	var buf = make([]byte, archive.blockSize)
 	for _, block := range archive.getSortedBlockRanges() {
 		if block.end >= int(start) && int(end) >= block.start {
-			buf := make([]byte, archive.blockSize)
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
-				return nil, fmt.Errorf("fetchCompressed: %s", err)
+				return nil, fmt.Errorf("fetchCompressed.%d.%d: %s", archive.numberOfPoints, block.index, err)
 			}
 
 			var err error
@@ -351,8 +345,13 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 			if err != nil {
 				return dst, err
 			}
+
+			for i := 0; i < archive.blockSize; i++ {
+				buf[i] = 0
+			}
 		}
 	}
+
 	if archive.hasBuffer() {
 		dps := unpackDataPoints(archive.buffer)
 		for _, p := range dps {
@@ -361,12 +360,87 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 			}
 		}
 	}
+
+	if base := whisper.archives[0]; base != archive {
+		var dps []dataPoint
+		if whisper.aggregationMethod == Mix {
+			var overflow = len(dst) > 0 && dst[len(dst)-1].interval < int(end)
+			var inBase bool
+			if overflow {
+				bstart, bend := base.getOverallRange()
+				inBase = int64(bstart) <= end || end <= int64(bend)
+			}
+
+			if inBase {
+				nstart := start
+				if len(dst) > 0 {
+					// TODO: invest why shifting the last data point interval is wrong
+					nstart = int64(archive.Interval(dst[len(dst)-1].interval)) // + archive.secondsPerPoint
+				}
+				var err error
+				dps, err = whisper.fetchCompressed(nstart, end, base)
+				if err != nil {
+					return dst, err
+				}
+			}
+		}
+
+		if base.hasBuffer() {
+			for _, p := range unpackDataPoints(base.buffer) {
+				if p.interval != 0 && int(start) <= p.interval && p.interval <= int(end) {
+					dps = append(dps, p)
+				}
+			}
+		}
+
+		// live aggregate
+		var pinterval int
+		var vals []float64
+		for i, dp := range dps {
+			interval := dp.interval - mod(dp.interval, archive.secondsPerPoint)
+			if pinterval == 0 || pinterval == interval {
+				pinterval = interval
+				vals = append(vals, dp.value)
+
+				if i < len(dps)-1 {
+					continue
+				}
+			}
+
+			// check we have enough data points to propagate a value
+			knownPercent := float32(len(vals)) / float32(archive.secondsPerPoint/base.secondsPerPoint)
+			if len(vals) > 0 && knownPercent >= whisper.xFilesFactor {
+				var ndp dataPoint
+				ndp.interval = pinterval
+				if whisper.aggregationMethod == Mix {
+					if archive.aggregationSpec.Method == Percentile {
+						ndp.value = getPercentile(archive.aggregationSpec.Percentile, vals)
+					} else {
+						ndp.value = aggregate(archive.aggregationSpec.Method, vals)
+					}
+				} else {
+					ndp.value = aggregate(whisper.aggregationMethod, vals)
+				}
+				dst = append(dst, ndp)
+			}
+
+			vals = vals[:0]
+			vals = append(vals, dp.value)
+			pinterval = interval
+		}
+	}
+
 	return dst, nil
 }
 
+// NOTE: this method assumes data saved in higer archives are fixed. If
+// we mvoe to allowing data/intervals coming in non-monotonic order, we
+// need to rethink the implementation here as well.
 func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points []*TimeSeriesPoint) error {
 	alignedPoints := alignPoints(archive, points)
 
+	// Note: in the current design, mix aggregation doesn't have any buffer in
+	// higer archives
 	if !archive.hasBuffer() {
 		rotated, err := archive.appendToBlockAndRotate(alignedPoints)
 		if err != nil {
@@ -525,6 +599,8 @@ func (archive *archiveInfo) appendToBlockAndRotate(dps []dataPoint) (rotated boo
 
 func (whisper *Whisper) extendIfNeeded() error {
 	var rets []*Retention
+	var mixSpecs []MixAggregationSpec
+	var mixSizes = make(map[int][]float32)
 	var extend bool
 	var msg string
 	for _, arc := range whisper.archives {
@@ -574,10 +650,20 @@ func (whisper *Whisper) extendIfNeeded() error {
 	filename := whisper.file.Name()
 	os.Remove(whisper.file.Name() + ".extend")
 
+	if whisper.aggregationMethod == Mix && len(rets) > 1 {
+		rets, mixSpecs, mixSizes = extractMixSpecs(rets, whisper.archives)
+	}
+
 	nwhisper, err := CreateWithOptions(
 		whisper.file.Name()+".extend", rets,
 		whisper.aggregationMethod, whisper.xFilesFactor,
-		&Options{Compressed: true, PointsPerBlock: DefaultPointsPerBlock, InMemory: whisper.opts.InMemory},
+		&Options{
+			Compressed:                 true,
+			PointsPerBlock:             DefaultPointsPerBlock,
+			InMemory:                   whisper.opts.InMemory,
+			MixAggregationSpecs:        mixSpecs,
+			MixAvgCompressedPointSizes: mixSizes,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("extend: %s", err)
@@ -626,6 +712,37 @@ func (whisper *Whisper) extendIfNeeded() error {
 	whisper.Extended = true
 
 	return err
+}
+
+func extractMixSpecs(orets Retentions, arcs []*archiveInfo) (Retentions, []MixAggregationSpec, map[int][]float32) {
+	var nrets Retentions
+	var specs []MixAggregationSpec
+	var sizes = make(map[int][]float32)
+	var specsCont bool
+
+	for i, ret := range orets {
+		sizes[ret.secondsPerPoint] = append(sizes[ret.secondsPerPoint], ret.avgCompressedPointSize)
+
+		if len(nrets) == 0 {
+			nrets = append(nrets, ret)
+			continue
+		}
+
+		if ret.secondsPerPoint != nrets[len(nrets)-1].secondsPerPoint {
+			nrets = append(nrets, ret)
+
+			if len(specs) == 0 {
+				specs = append(specs, *arcs[i].aggregationSpec)
+				specsCont = true
+			} else {
+				specsCont = false
+			}
+		} else if specsCont {
+			specs = append(specs, *arcs[i].aggregationSpec)
+		}
+	}
+
+	return nrets, specs, sizes
 }
 
 func (arc *archiveInfo) avgPointsPerBlockReal() float32 {
@@ -1003,6 +1120,7 @@ func (a *archiveInfo) ReadFromBlock(buf []byte, dst []dataPoint, start, end int)
 	br.bitPos = 7
 	br.current = PointSize
 
+	// the first data point is not compressed
 	p := unpackDataPoint(buf)
 	if start <= p.interval && p.interval <= end {
 		dst = append(dst, p)
@@ -1020,11 +1138,11 @@ readloop:
 		var p dataPoint
 
 		if debugCompress {
-			end := br.current + 8
-			if end >= len(br.buf) {
-				end = len(br.buf) - 1
+			endd := br.current + 8
+			if endd >= len(br.buf) {
+				endd = len(br.buf) - 1
 			}
-			fmt.Printf("new point %d:\n  br.index = %d/%d br.bitPos = %d byte = %08b peek(1) = %08b peek(2) = %08b peek(3) = %08b peek(4) = %08b buf[%d:%d] = %08b\n", len(dst), br.current, len(br.buf), br.bitPos, br.buf[br.current], br.Peek(1), br.Peek(2), br.Peek(3), br.Peek(4), br.current, end, br.buf[br.current:end])
+			fmt.Printf("new point %d:\n  br.index = %d/%d br.bitPos = %d byte = %08b peek(1) = %08b peek(2) = %08b peek(3) = %08b peek(4) = %08b buf[%d:%d] = %08b\n", len(dst), br.current, len(br.buf), br.bitPos, br.buf[br.current], br.Peek(1), br.Peek(2), br.Peek(3), br.Peek(4), br.current, endd, br.buf[br.current:endd])
 		}
 
 		var skip, toRead int
@@ -1048,8 +1166,8 @@ readloop:
 			if br.current >= len(buf)-1 {
 				break readloop
 			}
-			start, end, data := br.trailingDebug()
-			return dst, br.current, fmt.Errorf("unknown timestamp prefix (archive[%d]): %04b at %d@%d, context[%d-%d] = %08b len(dst) = %d", a.secondsPerPoint, br.Peek(4), br.current, br.bitPos, start, end, data, len(dst))
+			start, endd, data := br.trailingDebug()
+			return dst, br.current, fmt.Errorf("unknown timestamp prefix (archive[%d]): %04b at %d@%d, context[%d-%d] = %08b len(dst) = %d", a.secondsPerPoint, br.Peek(4), br.current, br.bitPos, start, endd, data, len(dst))
 		}
 
 		br.Read(skip)
@@ -1260,6 +1378,11 @@ func dumpBits(data ...uint64) string {
 //
 // CompressTo should stop compression/return errors when runs into any issues (if feasible).
 func (whisper *Whisper) CompressTo(dstPath string) error {
+	// Note: doesn't support mix-aggregation.
+	if whisper.aggregationMethod == Mix {
+		return errors.New("mix aggregation policy isn't supported.")
+	}
+
 	var rets []*Retention
 	for _, arc := range whisper.archives {
 		rets = append(rets, &Retention{secondsPerPoint: arc.secondsPerPoint, numberOfPoints: arc.numberOfPoints})
@@ -1498,13 +1621,21 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 		rets[i].avgCompressedPointSize = estimatePointSize(points, rets[i], rets[i].calculateSuitablePointsPerBlock(dstw.pointsPerBlock))
 	}
 
+	var mixSpecs []MixAggregationSpec
+	var mixSizes = make(map[int][]float32)
+	if dstw.aggregationMethod == Mix && len(rets) > 1 {
+		rets, mixSpecs, mixSizes = extractMixSpecs(rets, srcw.archives)
+	}
+
 	newDst, err := CreateWithOptions(
 		dstw.file.Name()+".fill", rets,
 		dstw.aggregationMethod, dstw.xFilesFactor,
 		&Options{
 			FLock: true, Compressed: true,
-			PointsPerBlock: DefaultPointsPerBlock,
-			InMemory:       true, // need to close file if switch to non in-memory
+			PointsPerBlock:             DefaultPointsPerBlock,
+			InMemory:                   true, // need to close file if switch to non in-memory
+			MixAggregationSpecs:        mixSpecs,
+			MixAvgCompressedPointSizes: mixSizes,
 		},
 	)
 	if err != nil {
@@ -1540,13 +1671,11 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 
 func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 	var largestSPP int
-	// var latestInterval int
 	var lastArchive *archiveInfo
 	var spps []int
 	for _, arc := range whisper.archives[1:] {
 		if arc.secondsPerPoint > largestSPP {
 			largestSPP = arc.secondsPerPoint
-			// latestInterval = arc.cblock.pn1.interval
 			lastArchive = arc
 		}
 
@@ -1562,24 +1691,59 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 		return nil
 	}
 
-	var propagatable bool
 	var baseArchive = whisper.archives[0]
-	var newInterval = baseArchive.cblock.pn1.interval - mod(baseArchive.cblock.pn1.interval, lastArchive.secondsPerPoint)
-	if lastArchive.cblock.pn1.interval == 0 {
-		propagatable = baseArchive.cblock.pn1.interval-baseArchive.getSortedBlockRanges()[0].start > largestSPP
-	} else {
-		propagatable = newInterval-lastArchive.cblock.pn1.interval > largestSPP // has at least 1 point to be propagated
-	}
+	var sortedBaseArcBrs = baseArchive.getSortedBlockRanges()
+	var until = baseArchive.cblock.pn1.interval
+	if until == 0 {
+		for _, br := range sortedBaseArcBrs {
+			if br.end == 0 {
+				break
+			}
 
-	if !propagatable {
+			until = br.end
+		}
+
+		if until == 0 {
+			return nil
+		}
+	}
+	// always exclude the last data point to make sure it's not a pre-mature propagation
+	until = lastArchive.Interval(until) - lastArchive.secondsPerPoint
+	if until <= 0 {
 		return nil
 	}
 
-	from := lastArchive.cblock.pn1.interval + lastArchive.secondsPerPoint
-	until := baseArchive.cblock.pn1.interval - mod(baseArchive.cblock.pn1.interval, lastArchive.secondsPerPoint)
+	var from int
+	if lastArchive.cblock.pn1.interval == 0 {
+		if sortedBaseArcBrs[0].start == 0 {
+			return nil
+		}
+		for _, br := range lastArchive.getSortedBlockRanges() {
+			if br.end == 0 {
+				break
+			}
+			from = br.end
+		}
+
+		if from == 0 {
+			from = sortedBaseArcBrs[0].start
+		}
+	} else {
+		from = lastArchive.cblock.pn1.interval + lastArchive.secondsPerPoint
+	}
+
+	// only propagate when there are enough data points for all the lower
+	// archives, for perfomance reason (in theory).
+	if until-from < largestSPP {
+		return nil
+	}
+
 	dps, err := whisper.fetchCompressed(int64(from), int64(until), baseArchive)
 	if err != nil {
 		return fmt.Errorf("mix: failed to baseArchive.fetchCompressed(%d, %d): %s", from, until, err)
+	}
+	if len(dps) == 0 {
+		return nil // TODO: should be an error?
 	}
 
 	type groupedDataPoint struct {
@@ -1590,25 +1754,34 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 	for _, dp := range dps {
 		for _, spp := range spps {
 			interval := dp.interval - mod(dp.interval, spp)
-			if len(dpsBySPP[spp]) > 0 {
-				gdp := dpsBySPP[spp][len(dpsBySPP[spp])-1]
-				if gdp.interval == interval {
-					gdp.values = append(gdp.values, dp.value)
-					continue
-				}
-
-				// check we have enough data points to propagate a value
-				knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
-				if knownPercent < whisper.xFilesFactor {
-					gdp.interval = interval
-					gdp.values = []float64{}
-					continue
-				}
-
-				// sorted for percentiles
-				sort.Float64s(gdp.values)
+			if len(dpsBySPP[spp]) == 0 {
+				dpsBySPP[spp] = append(dpsBySPP[spp], &groupedDataPoint{
+					interval: interval,
+					values:   []float64{dp.value},
+				})
+				continue
 			}
-			dpsBySPP[spp] = append(dpsBySPP[spp], &groupedDataPoint{interval: interval, values: []float64{dp.value}})
+
+			if gdp := dpsBySPP[spp][len(dpsBySPP[spp])-1]; gdp.interval == interval {
+				gdp.values = append(gdp.values, dp.value)
+				continue
+			}
+
+			gdp := &groupedDataPoint{
+				interval: interval,
+				values:   []float64{dp.value},
+			}
+			dpsBySPP[spp] = append(dpsBySPP[spp], gdp)
+
+			// check we have enough data points to propagate a value
+			knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
+			if knownPercent < whisper.xFilesFactor {
+				dpsBySPP[spp] = dpsBySPP[spp][:len(dpsBySPP[spp])-1]
+				continue
+			}
+
+			// sorted for percentiles
+			sort.Float64s(gdp.values)
 		}
 	}
 
@@ -1617,6 +1790,13 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 		dps := make([]dataPoint, len(gdps))
 		for i, gdp := range gdps {
 			dps[i].interval = gdp.interval
+
+			// TODO: try to come out with a better buffer value, random is 3
+			if len(gdp.values) < arc.secondsPerPoint && i+3 >= len(gdps) {
+				dps = dps[:i]
+				break
+			}
+
 			if arc.aggregationSpec.Method == Percentile {
 				dps[i].value = getPercentile(arc.aggregationSpec.Percentile, gdp.values)
 			} else {
@@ -1632,6 +1812,8 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 	return nil
 }
 
+// TODO: fix median/p50
+//
 // getPercentiles assumes values are sorted and use the nearest-rank method
 func getPercentile(p float32, vals []float64) float64 {
 	pos := int(math.Ceil(float64(p) * float64(len(vals)) / 100))
