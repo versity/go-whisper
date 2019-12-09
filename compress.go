@@ -414,7 +414,7 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 				ndp.interval = pinterval
 				if whisper.aggregationMethod == Mix {
 					if archive.aggregationSpec.Method == Percentile {
-						ndp.value = getPercentile(archive.aggregationSpec.Percentile, vals)
+						ndp.value = aggregatePercentile(archive.aggregationSpec.Percentile, vals)
 					} else {
 						ndp.value = aggregate(archive.aggregationSpec.Method, vals)
 					}
@@ -1798,7 +1798,7 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 			}
 
 			if arc.aggregationSpec.Method == Percentile {
-				dps[i].value = getPercentile(arc.aggregationSpec.Percentile, gdp.values)
+				dps[i].value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
 			} else {
 				dps[i].value = aggregate(arc.aggregationSpec.Method, gdp.values)
 			}
@@ -1812,15 +1812,19 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 	return nil
 }
 
-// TODO: fix median/p50
-//
-// getPercentiles assumes values are sorted and use the nearest-rank method
-func getPercentile(p float32, vals []float64) float64 {
-	pos := int(math.Ceil(float64(p) * float64(len(vals)) / 100))
-	if pos == 0 {
-		pos = 1
-	} else if pos > len(vals) {
-		pos = len(vals)
+// Same implementation copied from carbonapi, without using quickselect for
+// keeping zero dependency.
+// percentile values: 0 - 100
+func aggregatePercentile(p float32, vals []float64) float64 {
+	if len(vals) == 0 || p < 0 || p > 100 {
+		return math.NaN()
 	}
-	return vals[pos-1]
+
+	k := (float64(len(vals)-1) * float64(p)) / 100
+	index := int(math.Ceil(k))
+	remainder := k - float64(int(k))
+	if remainder == 0 {
+		return vals[index]
+	}
+	return (vals[index] * remainder) + (vals[index-1] * (1 - remainder))
 }

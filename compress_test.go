@@ -1381,3 +1381,35 @@ func BenchmarkWriteStandard(b *testing.B) {
 		b.Fatal(err)
 	}
 }
+
+func TestAggregatePercentile(t *testing.T) {
+	for _, c := range []struct {
+		percentile float32
+		expect     float64
+		vals       []float64
+	}{
+		{50, 4.0, []float64{1, 2, 3, 4, 5, 6, 7}},
+		{50, 4.5, []float64{1, 2, 3, 4, 5, 6, 7, 8}},
+		{50, 1.0, []float64{1}},
+		{50, math.NaN(), []float64{}},
+		{90, 9.1, []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
+		{99, 99.01, func() []float64 {
+			var vals []float64
+			for i := 0; i < 100; i++ {
+				vals = append(vals, float64(i+1))
+			}
+			return vals
+		}()},
+		{99.9, 999.001015, func() []float64 {
+			var vals []float64
+			for i := 0; i < 1000; i++ {
+				vals = append(vals, float64(i+1))
+			}
+			return vals
+		}()},
+	} {
+		if got, want := aggregatePercentile(c.percentile, c.vals), c.expect; math.Trunc(got*10000) != math.Trunc(want*10000) && !(math.IsNaN(got) && math.IsNaN(want)) {
+			t.Errorf("aggregatePercentile(%.2f, %v) = %f; want %f", c.percentile, c.vals, got, want)
+		}
+	}
+}
