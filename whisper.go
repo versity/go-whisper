@@ -173,7 +173,7 @@ type archiveInfo struct {
 	//  is necessary to have it, so it's possible to optimize away buffers in lower
 	//  archives.
 	buffer     []byte
-	bufferSize int
+	bufferSize int // dynamically calculated in Whisper.initMetaInfo
 
 	blockRanges []blockRange // TODO: remove: sorted by start
 	blockSize   int
@@ -643,10 +643,6 @@ func (whisper *Whisper) initMetaInfo() {
 		}
 
 		if i == 0 {
-			if whisper.aggregationMethod == Mix {
-				// TODO
-				// arc.bufferSize =
-			}
 			continue
 		}
 

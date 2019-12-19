@@ -912,7 +912,6 @@ func TestEstimatePointSize(t *testing.T) {
 	return
 }
 
-// TODO: srcMix is empty, investigate why
 func TestFillCompressedMix(t *testing.T) {
 	srcPath := "fill-mix.src.cwsp"
 	dstPath := "fill-mix.dst.cwsp"
@@ -954,11 +953,9 @@ func TestFillCompressedMix(t *testing.T) {
 	nowNext := func() time.Time { now++; return Now() }
 	defer func() { Now = func() time.Time { return time.Now() } }()
 
-	// twoMonthsAgo := Now().Add(time.Hour * 24 * -60)
 	limit = 300 + rand.Intn(100)
 	for i, end := 0, 60*60*24*80; i < end; i++ {
 		points = append(points, &TimeSeriesPoint{
-			// Time:  int(twoMonthsAgo.Add(time.Second * time.Duration(i)).Unix()),
 			Time:  int(nowNext().Unix()),
 			Value: rand.NormFloat64(),
 		})
@@ -1078,8 +1075,6 @@ func TestFillCompressedMix(t *testing.T) {
 	compare(dstMix, oldDstMix, int(Now().Add(time.Hour*24*-2+time.Hour).Unix()), int(Now().Unix()))
 }
 
-// TODO: check if there are duplicated timestamps by directly reading
-// data from blocks
 func TestFetchCompressedMix(t *testing.T) {
 	srcPath := "fetch-mix.cwsp"
 	os.Remove(srcPath)
@@ -1119,7 +1114,6 @@ func TestFetchCompressedMix(t *testing.T) {
 
 	for i := 0; i < 4*60*60; i++ {
 		points = append(points, &TimeSeriesPoint{
-			// Time:  int(start.Add(time.Second * time.Duration(i)).Unix()),
 			Time:  int(Now().Unix()),
 			Value: float64(i),
 		})
@@ -1143,7 +1137,6 @@ func TestFetchCompressedMix(t *testing.T) {
 		t.Error(err)
 	}
 
-	// data, err := srcMix.Fetch(int(start.Unix()), int(Now().Unix()))
 	t.Run("Check1stArchive", func(t *testing.T) {
 		data, err := srcMix.FetchByAggregation(now-10, now, &MixAggregationSpec{Method: Min})
 		if err != nil {

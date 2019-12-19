@@ -121,11 +121,6 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 	fmt.Printf("points_per_block:     %d\n", archive.calculateSuitablePointsPerBlock(archive.whisper.pointsPerBlock))
 	fmt.Printf("compression_ratio:    %f (%d/%d)\n", float64(archive.blockSize*archive.blockCount)/float64(archive.Size()), archive.blockSize*archive.blockCount, archive.Size())
 	if archive.aggregationSpec != nil {
-		// if archive.aggregationSpec.Method == Percentile {
-		// 	fmt.Printf("aggregation:          p%.2f\n", archive.aggregationSpec.Percentile)
-		// } else {
-		// 	fmt.Printf("aggregation:          %s\n", archive.aggregationSpec.Method)
-		// }
 		fmt.Printf("aggregation:          %s\n", archive.aggregationSpec)
 	}
 

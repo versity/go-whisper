@@ -361,12 +361,18 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 		}
 	}
 
+	// Start live aggregation. This probably has a read peformance hit.
 	if base := whisper.archives[0]; base != archive {
 		var dps []dataPoint
+
+		// Mix aggregation is triggered when block in base archive is rotated and also
+		// depends on the sufficiency of data points. This could results to a over
+		// long gap when fetching data from higer archives, depending on different
+		// retention policy. Therefore cwhisper needs to do live aggregation.
 		if whisper.aggregationMethod == Mix {
-			var overflow = len(dst) > 0 && dst[len(dst)-1].interval < int(end)
+			var baseLookupNeeded = len(dst) > 0 && dst[len(dst)-1].interval < int(end)
 			var inBase bool
-			if overflow {
+			if baseLookupNeeded {
 				bstart, bend := base.getOverallRange()
 				inBase = int64(bstart) <= end || end <= int64(bend)
 			}
@@ -385,6 +391,7 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 			}
 		}
 
+		// This would benefits both mix and no-mix aggregations.
 		if base.hasBuffer() {
 			for _, p := range unpackDataPoints(base.buffer) {
 				if p.interval != 0 && int(start) <= p.interval && p.interval <= int(end) {
@@ -393,7 +400,6 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 			}
 		}
 
-		// live aggregate
 		var pinterval int
 		var vals []float64
 		for i, dp := range dps {
@@ -514,6 +520,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 			aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
 			point := &TimeSeriesPoint{lowerIntervalStart, aggregateValue}
 
+			// TODO: consider migrating to a non-recursive propagation implementation like mix policy
 			if err := whisper.archiveUpdateManyCompressed(lower, []*TimeSeriesPoint{point}); err != nil {
 				return err
 			}
