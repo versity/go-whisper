@@ -144,11 +144,7 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 
 func (arc *archiveInfo) dumpDataPointsCompressed() {
 	if arc.hasBuffer() {
-		fmt.Printf("archive %s buffer[%d]:\n", arc.Retention, len(arc.buffer)/PointSize)
-		dps := unpackDataPoints(arc.buffer)
-		for i, p := range dps {
-			fmt.Printf("  % 4d %d: %f\n", i, p.interval, p.value)
-		}
+		arc.dumpBuffer()
 	}
 
 	for _, block := range arc.blockRanges {
@@ -181,6 +177,14 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			// continue
 			fmt.Printf("  % 4d %d: %v\n", i, p.interval, p.value)
 		}
+	}
+}
+
+func (arc *archiveInfo) dumpBuffer() {
+	fmt.Printf("archive %s buffer[%d]:\n", arc.Retention, len(arc.buffer)/PointSize)
+	dps := unpackDataPoints(arc.buffer)
+	for i, p := range dps {
+		fmt.Printf("  % 4d %d: %f\n", i, p.interval, p.value)
 	}
 }
 

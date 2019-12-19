@@ -361,6 +361,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 		// increasing in time
 		if minInterval != 0 && bpBaseInterval < minInterval {
 			archive.stats.discard.oldInterval++
+			aindex++
 			continue
 		}
 
@@ -434,7 +435,7 @@ func (archive *archiveInfo) getBufferInfo() (units []int, index, min int) {
 			max = v
 			index = i
 		}
-		if min > v {
+		if min == 0 || min > v {
 			min = v
 		}
 	}
