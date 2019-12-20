@@ -563,7 +563,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].file.read: %s", i, block.index, err)
 			}
-			dst, _, err := archive.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+			dst, _, err := archive.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 			if err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].read: %s", i, block.index, err)
 			}

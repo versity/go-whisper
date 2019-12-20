@@ -29,7 +29,7 @@ func (whisper *Whisper) CheckIntegrity() {
 			if err := whisper.fileReadAt(buf, int64(arc.blockOffset(block.index))); err != nil {
 				panic(err)
 			}
-			_, _, err := arc.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+			_, _, err := arc.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 			if err != nil {
 				panic(err)
 			}
@@ -159,7 +159,7 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			panic(err)
 		}
 
-		dps, _, err := arc.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+		dps, _, err := arc.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 		if err != nil {
 			panic(err)
 		}
