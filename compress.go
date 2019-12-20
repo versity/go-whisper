@@ -370,6 +370,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 			aindex++
 			baseIntervalsPerUnit[currentUnit] = bpBaseInterval
 
+			// TODO: not efficient if many data points are being written in one call
 			offset := currentUnit*bufferUnitPointsCount + (dp.interval-bpBaseInterval)/archive.secondsPerPoint
 			copy(archive.buffer[offset*PointSize:], dp.Bytes())
 
