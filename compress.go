@@ -361,6 +361,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 		// increasing in time
 		if minInterval != 0 && bpBaseInterval < minInterval {
 			archive.stats.discard.oldInterval++
+			aindex++
 			continue
 		}
 
@@ -369,6 +370,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 			aindex++
 			baseIntervalsPerUnit[currentUnit] = bpBaseInterval
 
+			// TODO: not efficient if many data points are being written in one call
 			offset := currentUnit*bufferUnitPointsCount + (dp.interval-bpBaseInterval)/archive.secondsPerPoint
 			copy(archive.buffer[offset*PointSize:], dp.Bytes())
 
@@ -434,7 +436,7 @@ func (archive *archiveInfo) getBufferInfo() (units []int, index, min int) {
 			max = v
 			index = i
 		}
-		if min > v {
+		if min == 0 || min > v {
 			min = v
 		}
 	}
@@ -562,7 +564,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].file.read: %s", i, block.index, err)
 			}
-			dst, _, err := archive.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+			dst, _, err := archive.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 			if err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].read: %s", i, block.index, err)
 			}

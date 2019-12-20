@@ -29,7 +29,7 @@ func (whisper *Whisper) CheckIntegrity() {
 			if err := whisper.fileReadAt(buf, int64(arc.blockOffset(block.index))); err != nil {
 				panic(err)
 			}
-			_, _, err := arc.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+			_, _, err := arc.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 			if err != nil {
 				panic(err)
 			}
@@ -144,11 +144,7 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 
 func (arc *archiveInfo) dumpDataPointsCompressed() {
 	if arc.hasBuffer() {
-		fmt.Printf("archive %s buffer[%d]:\n", arc.Retention, len(arc.buffer)/PointSize)
-		dps := unpackDataPoints(arc.buffer)
-		for i, p := range dps {
-			fmt.Printf("  % 4d %d: %f\n", i, p.interval, p.value)
-		}
+		arc.dumpBuffer()
 	}
 
 	for _, block := range arc.blockRanges {
@@ -163,7 +159,7 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			panic(err)
 		}
 
-		dps, _, err := arc.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+		dps, _, err := arc.ReadFromBlock(buf, []dataPoint{}, 0, maxInt)
 		if err != nil {
 			panic(err)
 		}
@@ -181,6 +177,14 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			// continue
 			fmt.Printf("  % 4d %d: %v\n", i, p.interval, p.value)
 		}
+	}
+}
+
+func (arc *archiveInfo) dumpBuffer() {
+	fmt.Printf("archive %s buffer[%d]:\n", arc.Retention, len(arc.buffer)/PointSize)
+	dps := unpackDataPoints(arc.buffer)
+	for i, p := range dps {
+		fmt.Printf("  % 4d %d: %f\n", i, p.interval, p.value)
 	}
 }
 

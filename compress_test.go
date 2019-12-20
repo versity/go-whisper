@@ -191,6 +191,15 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 	if err := whisper.UpdateMany(input); err != nil {
 		t.Error(err)
 	}
+
+	// this negative data points should be ignored
+	if err := whisper.UpdateMany([]*TimeSeriesPoint{{Time: next(0) - 10, Value: 12}}); err != nil {
+		t.Error(err)
+	}
+	if got, want := whisper.archives[0].stats.discard.oldInterval, uint32(1); got != want {
+		t.Errorf("whisper.archives[0].stats.discard.oldInterval = %d; want %d", got, want)
+	}
+
 	whisper.Close()
 
 	whisper, err = OpenWithOptions(fpath, &Options{Compressed: true, PointsPerBlock: 7200})
@@ -216,6 +225,65 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 	} else if diff := cmp.Diff(ts, expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
 		t.Error(diff)
 	}
+
+	t.Run("buffer_overflow", func(t *testing.T) {
+		// fmt.Println("---")
+		// whisper.archives[0].dumpDataPointsCompressed()
+		if err := whisper.UpdateMany([]*TimeSeriesPoint{
+			{Time: next(5), Value: 10},
+			{Time: next(5), Value: 11},
+			{Time: next(5), Value: 12},
+		}); err != nil {
+			t.Error(err)
+		}
+		// fmt.Println("---")
+		// whisper.archives[0].dumpDataPointsCompressed()
+
+		if err := whisper.UpdateMany([]*TimeSeriesPoint{
+			{Time: next(0) - 15, Value: 13},
+			{Time: next(0) - 10, Value: 13},
+		}); err != nil {
+			t.Error(err)
+		}
+		// fmt.Println("---")
+		// whisper.archives[0].dumpDataPointsCompressed()
+
+		// debugCompress = true
+		if err := whisper.UpdateMany([]*TimeSeriesPoint{
+			{Time: next(0) - 5, Value: 14},
+			{Time: next(0) - 0, Value: 15},
+		}); err != nil {
+			t.Error(err)
+		}
+		// debugCompress = false
+
+		// fmt.Println("---")
+		// whisper.archives[0].dumpDataPointsCompressed()
+
+		expect := []TimeSeriesPoint{
+			{Time: next(0) - 14, Value: math.NaN()},
+			{Time: next(0) - 13, Value: math.NaN()},
+			{Time: next(0) - 12, Value: math.NaN()},
+			{Time: next(0) - 11, Value: math.NaN()},
+			{Time: next(0) - 10, Value: 10},
+			{Time: next(0) - 9, Value: math.NaN()},
+			{Time: next(0) - 8, Value: math.NaN()},
+			{Time: next(0) - 7, Value: math.NaN()},
+			{Time: next(0) - 6, Value: math.NaN()},
+			{Time: next(0) - 5, Value: 14},
+			{Time: next(0) - 4, Value: math.NaN()},
+			{Time: next(0) - 3, Value: math.NaN()},
+			{Time: next(0) - 2, Value: math.NaN()},
+			{Time: next(0) - 1, Value: math.NaN()},
+			{Time: next(0) - 0, Value: 15},
+		}
+		if ts, err := whisper.Fetch(next(0)-15, next(0)); err != nil {
+			t.Error(err)
+		} else if diff := cmp.Diff(ts.Points(), expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
+			t.Error(diff)
+		}
+	})
+	whisper.Close()
 }
 
 func TestCompressedWhisperReadWrite2(t *testing.T) {
