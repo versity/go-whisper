@@ -144,12 +144,18 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 			lastByteOffset = archive.cblock.lastByteOffset
 		}
 		fmt.Printf(
-			"%02d: %10d %s - %10d %s count:%5d crc32:%08x start_offset:%d last_byte_offset: %d\n",
+			"%02d: %10d %s - %10d %s count:%5d crc32:%08x start:%d last_byte:%d end:%d\n",
 			block.index,
 			block.start, toTime(block.start),
 			block.end, toTime(block.end),
-			block.count, block.crc32,
+			(func() int {
+				if block.count == 0 {
+					return 0
+				}
+				return block.count + 1
+			})(), block.crc32,
 			archive.blockOffset(block.index), lastByteOffset,
+			archive.blockOffset(block.index)+archive.blockSize,
 		)
 	}
 }
@@ -185,18 +191,18 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			panic(err)
 		}
 
-		endOffset := arc.blockSize
+		blockSize := arc.blockSize
 		if block.index == arc.cblock.index {
-			endOffset = arc.cblock.lastByteOffset - arc.blockOffset(block.index)
+			blockSize = arc.cblock.lastByteOffset - arc.blockOffset(block.index)
 		}
-		crc := crc32(buf[:endOffset], 0)
+		crc := crc32(buf[:blockSize], 0)
 
 		startOffset := int(arc.blockOffset(block.index))
-		fmt.Printf("crc32: %08x check: %08x startOffset: %d endOffset: %d length: %d\n", block.crc32, crc, startOffset, startOffset+endOffset, endOffset)
+		fmt.Printf("crc32: %08x check: %08x start: %d end: %d length: %d\n", block.crc32, crc, startOffset, startOffset+blockSize, blockSize)
 
 		for i, p := range dps {
 			// continue
-			fmt.Printf("  % 4d %d %s: %v\n", i, p.interval, toTime(p.interval), p.value)
+			fmt.Printf("  % 4d %d %s: %f\n", i, p.interval, toTime(p.interval), p.value)
 		}
 	}
 }
