@@ -1112,7 +1112,7 @@ func TestFetchCompressedMix(t *testing.T) {
 	Now = func() time.Time { return time.Unix(int64(now), 0) }
 	defer func() { Now = func() time.Time { return time.Now() } }()
 
-	for i := 0; i < 4*60*60; i++ {
+	for i, total := 0, 4*60*60; i < total; i++ {
 		points = append(points, &TimeSeriesPoint{
 			Time:  int(Now().Unix()),
 			Value: float64(i),
@@ -1122,15 +1122,12 @@ func TestFetchCompressedMix(t *testing.T) {
 		// To trigger frequent aggregations. Because of the current
 		// implementation logics if all data points are updated in a single
 		// function call, only one aggregation is triggered.
-		if len(points) > 1000 {
+		if len(points) > 1000 || i == total-1 {
 			if err := srcMix.UpdateMany(points); err != nil {
 				t.Error(err)
 			}
 			points = points[:0]
 		}
-	}
-	if err := srcMix.UpdateMany(points); err != nil {
-		t.Error(err)
 	}
 
 	if err := srcMix.file.(*memFile).dumpOnDisk(srcPath); err != nil {

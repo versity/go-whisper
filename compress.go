@@ -370,7 +370,7 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 		// long gap when fetching data from higer archives, depending on different
 		// retention policy. Therefore cwhisper needs to do live aggregation.
 		if whisper.aggregationMethod == Mix {
-			var baseLookupNeeded = len(dst) > 0 && dst[len(dst)-1].interval < int(end)
+			var baseLookupNeeded = len(dst) == 0 || dst[len(dst)-1].interval < int(end)
 			var inBase bool
 			if baseLookupNeeded {
 				bstart, bend := base.getOverallRange()
@@ -403,6 +403,7 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 		var pinterval int
 		var vals []float64
 		for i, dp := range dps {
+			// same as archiveInfo.AggregateInterval
 			interval := dp.interval - mod(dp.interval, archive.secondsPerPoint)
 			if pinterval == 0 || pinterval == interval {
 				pinterval = interval
@@ -1714,8 +1715,8 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 			return nil
 		}
 	}
-	// always exclude the last data point to make sure it's not a pre-mature propagation
-	until = lastArchive.Interval(until) - lastArchive.secondsPerPoint
+	// always exclude the last data point to make sure it's not a pre-mature propagation.
+	until = lastArchive.Interval(until) - 1
 	if until <= 0 {
 		return nil
 	}
@@ -1760,7 +1761,7 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 	var dpsBySPP = map[int][]*groupedDataPoint{}
 	for _, dp := range dps {
 		for _, spp := range spps {
-			interval := dp.interval - mod(dp.interval, spp)
+			interval := dp.interval - mod(dp.interval, spp) // same as archiveInfo.AggregateInterval
 			if len(dpsBySPP[spp]) == 0 {
 				dpsBySPP[spp] = append(dpsBySPP[spp], &groupedDataPoint{
 					interval: interval,
@@ -1792,23 +1793,44 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 		}
 	}
 
+	if len(dpsBySPP[largestSPP]) == 0 {
+		return nil
+	}
+
+	var skipInterval int
+	var maxBufferSPP = 3 // TODO: come out with a better value?
+	// Handle cases of retentions ratio smaller than 3 between base and the
+	// last archives.
+	if ratio := whisper.archives[0].MaxRetention() / largestSPP; ratio < maxBufferSPP {
+		maxBufferSPP = 0
+	}
+	// Make sure that we don't propagate prematurely by checking there are
+	// enough data points for the last archives.
+	for i := len(dpsBySPP[largestSPP]) - 1; i >= 0 && i >= len(dpsBySPP[largestSPP])-maxBufferSPP; i-- {
+		if len(dpsBySPP[largestSPP][i].values) < largestSPP/whisper.archives[0].secondsPerPoint {
+			skipInterval = dpsBySPP[largestSPP][i].interval
+		}
+	}
+
 	for _, arc := range whisper.archives[1:] {
 		gdps := dpsBySPP[arc.secondsPerPoint]
 		dps := make([]dataPoint, len(gdps))
 		for i, gdp := range gdps {
-			dps[i].interval = gdp.interval
-
-			// TODO: try to come out with a better buffer value, random is 3
-			if len(gdp.values) < arc.secondsPerPoint && i+3 >= len(gdps) {
+			if skipInterval > 0 && gdp.interval >= skipInterval {
 				dps = dps[:i]
 				break
 			}
+
+			dps[i].interval = gdp.interval
 
 			if arc.aggregationSpec.Method == Percentile {
 				dps[i].value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
 			} else {
 				dps[i].value = aggregate(arc.aggregationSpec.Method, gdp.values)
 			}
+		}
+		if len(dps) == 0 {
+			continue
 		}
 
 		if _, err := arc.appendToBlockAndRotate(dps); err != nil {

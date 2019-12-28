@@ -1181,7 +1181,7 @@ func (whisper *Whisper) FetchByAggregation(fromTime, untilTime int, spec *MixAgg
 	var archive *archiveInfo
 	for _, archive = range whisper.archives {
 		if archive.MaxRetention() >= diff {
-			// TODO: select a default aggregation policy
+			// TODO: select a default aggregation policy?
 			if whisper.aggregationMethod == Mix && spec != nil && archive.aggregationSpec != nil && spec.String() != archive.aggregationSpec.String() {
 				continue
 			}
