@@ -212,7 +212,7 @@ type blockInfo struct {
 type blockRange struct {
 	index      int
 	start, end int // start and end timestamps
-	count      int
+	count      int // should be named as index
 	crc32      uint32
 }
 
@@ -1182,12 +1182,16 @@ func (whisper *Whisper) FetchByAggregation(fromTime, untilTime int, spec *MixAgg
 	for _, archive = range whisper.archives {
 		if archive.MaxRetention() >= diff {
 			// TODO: select a default aggregation policy
-			if spec != nil && archive.aggregationSpec != nil && *spec != *archive.aggregationSpec {
+			if whisper.aggregationMethod == Mix && spec != nil && archive.aggregationSpec != nil && spec.String() != archive.aggregationSpec.String() {
 				continue
 			}
 
 			break
 		}
+	}
+	// NOTE: base (i.e. the first) archive should have a nil aggregationSpec
+	if whisper.aggregationMethod == Mix && spec != nil && archive.aggregationSpec != nil && spec.String() != archive.aggregationSpec.String() {
+		return nil, fmt.Errorf("target aggregation %s not found", spec)
 	}
 
 	fromInterval := archive.Interval(fromTime)
