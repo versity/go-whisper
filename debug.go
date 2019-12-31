@@ -3,6 +3,7 @@ package whisper
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 func (whisper *Whisper) CheckIntegrity() {
@@ -78,7 +79,11 @@ func (whisper *Whisper) Dump(all, showDecompressionInfo bool) {
 
 	fmt.Printf("archives:                  %d\n", len(whisper.archives))
 	for i, arc := range whisper.archives {
-		fmt.Printf("archives.%d.retention:      %s\n", i, arc.Retention)
+		var agg string
+		if arc.aggregationSpec != nil {
+			agg = fmt.Sprintf(" (%s)", arc.aggregationSpec)
+		}
+		fmt.Printf("archives.%d.retention:      %s%s\n", i, arc.Retention, agg)
 	}
 
 	for i, arc := range whisper.archives {
@@ -115,11 +120,16 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 	fmt.Printf("block_count:          %d\n", archive.blockCount)
 	fmt.Printf("points_per_block:     %d\n", archive.calculateSuitablePointsPerBlock(archive.whisper.pointsPerBlock))
 	fmt.Printf("compression_ratio:    %f (%d/%d)\n", float64(archive.blockSize*archive.blockCount)/float64(archive.Size()), archive.blockSize*archive.blockCount, archive.Size())
+	if archive.aggregationSpec != nil {
+		fmt.Printf("aggregation:          %s\n", archive.aggregationSpec)
+	}
+
+	toTime := func(t int) string { return time.Unix(int64(t), 0).Format("2006-01-02 15:04:05") }
 	fmt.Printf("cblock\n")
 	fmt.Printf("  index:     %d\n", archive.cblock.index)
-	fmt.Printf("  p[0].interval:     %d\n", archive.cblock.p0.interval)
-	fmt.Printf("  p[n-2].interval:   %d\n", archive.cblock.pn2.interval)
-	fmt.Printf("  p[n-1].interval:   %d\n", archive.cblock.pn1.interval)
+	fmt.Printf("  p[0].interval:     %d %s\n", archive.cblock.p0.interval, toTime(archive.cblock.p0.interval))
+	fmt.Printf("  p[n-2].interval:   %d %s\n", archive.cblock.pn2.interval, toTime(archive.cblock.pn2.interval))
+	fmt.Printf("  p[n-1].interval:   %d %s\n", archive.cblock.pn1.interval, toTime(archive.cblock.pn1.interval))
 	fmt.Printf("  last_byte:         %08b\n", archive.cblock.lastByte)
 	fmt.Printf("  last_byte_offset:  %d\n", archive.cblock.lastByteOffset)
 	fmt.Printf("  last_byte_bit_pos: %d\n", archive.cblock.lastByteBitPos)
@@ -134,10 +144,18 @@ func (archive *archiveInfo) dumpInfoCompressed() {
 			lastByteOffset = archive.cblock.lastByteOffset
 		}
 		fmt.Printf(
-			"%02d: %10d - %10d count:%5d crc32:%08x start_offset:%d last_byte_offset: %d\n",
-			block.index, block.start,
-			block.end, block.count, block.crc32,
+			"%02d: %10d %s - %10d %s count:%5d crc32:%08x start:%d last_byte:%d end:%d\n",
+			block.index,
+			block.start, toTime(block.start),
+			block.end, toTime(block.end),
+			(func() int {
+				if block.count == 0 {
+					return 0
+				}
+				return block.count + 1
+			})(), block.crc32,
 			archive.blockOffset(block.index), lastByteOffset,
+			archive.blockOffset(block.index)+archive.blockSize,
 		)
 	}
 }
@@ -147,6 +165,11 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 		arc.dumpBuffer()
 	}
 
+	if arc.aggregationSpec != nil {
+		fmt.Printf("aggregation: %s\n", arc.aggregationSpec)
+	}
+
+	toTime := func(t int) string { return time.Unix(int64(t), 0).Format("2006-01-02 15:04:05") }
 	for _, block := range arc.blockRanges {
 		fmt.Printf("archive %s block %d @%d\n", arc.Retention, block.index, arc.blockOffset(block.index))
 		if block.start == 0 {
@@ -164,18 +187,18 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 			panic(err)
 		}
 
-		endOffset := arc.blockSize
+		blockSize := arc.blockSize
 		if block.index == arc.cblock.index {
-			endOffset = arc.cblock.lastByteOffset - arc.blockOffset(block.index)
+			blockSize = arc.cblock.lastByteOffset - arc.blockOffset(block.index)
 		}
-		crc := crc32(buf[:endOffset], 0)
+		crc := crc32(buf[:blockSize], 0)
 
 		startOffset := int(arc.blockOffset(block.index))
-		fmt.Printf("crc32: %08x check: %08x startOffset: %d endOffset: %d length: %d\n", block.crc32, crc, startOffset, startOffset+endOffset, endOffset)
+		fmt.Printf("crc32: %08x check: %08x start: %d end: %d length: %d\n", block.crc32, crc, startOffset, startOffset+blockSize, blockSize)
 
 		for i, p := range dps {
 			// continue
-			fmt.Printf("  % 4d %d: %v\n", i, p.interval, p.value)
+			fmt.Printf("  % 4d %d %s: %f\n", i, p.interval, toTime(p.interval), p.value)
 		}
 	}
 }
@@ -224,4 +247,5 @@ func GenTestArchive(buf []byte, ret Retention) *archiveInfo {
 
 	return &na
 }
+
 func GenDataPointSlice() []dataPoint { return []dataPoint{} }

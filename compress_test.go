@@ -980,6 +980,341 @@ func TestEstimatePointSize(t *testing.T) {
 	return
 }
 
+func TestFillCompressedMix(t *testing.T) {
+	srcPath := "fill-mix.src.cwsp"
+	dstPath := "fill-mix.dst.cwsp"
+	os.Remove(srcPath)
+	os.Remove(dstPath)
+
+	srcMix, err := CreateWithOptions(
+		srcPath,
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 172800},   // 1s:2d
+			{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
+			{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
+		},
+		Mix,
+		0,
+		&Options{
+			Compressed: true, PointsPerBlock: 7200, InMemory: true,
+			MixAggregationSpecs: []MixAggregationSpec{
+				{Method: Average, Percentile: 0},
+				{Method: Sum, Percentile: 0},
+				{Method: Last, Percentile: 0},
+				{Method: Max, Percentile: 0},
+				{Method: Min, Percentile: 0},
+				{Method: Percentile, Percentile: 50},
+				{Method: Percentile, Percentile: 95},
+				{Method: Percentile, Percentile: 99},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	var points []*TimeSeriesPoint
+	var limit int
+	var start = 1544478600
+	var now = start
+	Now = func() time.Time { return time.Unix(int64(now), 0) }
+	nowNext := func() time.Time { now++; return Now() }
+	defer func() { Now = func() time.Time { return time.Now() } }()
+
+	limit = 300 + rand.Intn(100)
+	for i, end := 0, 60*60*24*80; i < end; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(nowNext().Unix()),
+			Value: rand.NormFloat64(),
+		})
+
+		if len(points) > limit || i == end-1 {
+			limit = 300 + rand.Intn(100)
+			if err := srcMix.UpdateMany(points); err != nil {
+				t.Error(err)
+			}
+			points = points[:0]
+		}
+	}
+
+	dstMix, err := CreateWithOptions(
+		dstPath,
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 172800},   // 1s:2d
+			{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
+			{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
+		},
+		Mix,
+		0,
+		&Options{
+			Compressed: true, PointsPerBlock: 7200, InMemory: true,
+			MixAggregationSpecs: []MixAggregationSpec{
+				{Method: Average, Percentile: 0},
+				{Method: Sum, Percentile: 0},
+				{Method: Last, Percentile: 0},
+				{Method: Max, Percentile: 0},
+				{Method: Min, Percentile: 0},
+				{Method: Percentile, Percentile: 50},
+				{Method: Percentile, Percentile: 95},
+				{Method: Percentile, Percentile: 99},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+	points = []*TimeSeriesPoint{}
+	limit = 300 + rand.Intn(100)
+	for i, end := 0, 60*60*24*2; i < end; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(nowNext().Unix()),
+			Value: rand.NormFloat64(),
+		})
+
+		if len(points) > limit || i == end-1 {
+			limit = 300 + rand.Intn(100)
+			if err := dstMix.UpdateMany(points); err != nil {
+				t.Error(err)
+			}
+			points = points[:0]
+		}
+	}
+	if err := dstMix.UpdateMany(points); err != nil {
+		t.Error(err)
+	}
+
+	if err := dstMix.file.(*memFile).dumpOnDisk(dstPath + ".bak"); err != nil {
+		t.Error(err)
+	}
+
+	if err := dstMix.FillCompressed(srcMix); err != nil {
+		t.Error(err)
+	}
+
+	if err := dstMix.file.(*memFile).dumpOnDisk(dstPath); err != nil {
+		t.Error(err)
+	}
+	if err := srcMix.file.(*memFile).dumpOnDisk(srcPath); err != nil {
+		t.Error(err)
+	}
+
+	compare := func(w1, w2 *Whisper, from, until int) {
+		valsc, err := w1.Fetch(from, until)
+		if err != nil {
+			t.Error(err)
+		}
+		valss, err := w2.Fetch(from, until)
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("  dst %d src %d", len(valsc.values), len(valss.values))
+		var diff, same, nonNans int
+		for i := 0; i < len(valsc.values); i++ {
+			vc := valsc.values[i]
+			vs := valss.values[i]
+			if math.IsNaN(vc) && math.IsNaN(vs) {
+				same++
+			} else if vc != vs {
+				t.Errorf("%d/%d %d: %v != %v\n", i, len(valsc.values), valsc.fromTime+i*valsc.step, vc, vs)
+				diff++
+				nonNans++
+			} else {
+				same++
+				nonNans++
+			}
+		}
+		if diff > 0 {
+			t.Errorf("  diff %d", diff)
+			t.Errorf("  same %d", same)
+		}
+		t.Logf("  non-nans %d", nonNans)
+	}
+
+	t.Log("comparing 2 years archive")
+	compare(dstMix, srcMix, now-365*24*60*60, now-28*24*60*60)
+	t.Log("comparing 1 month archive")
+	compare(dstMix, srcMix, now-28*24*60*60, now-30*2*60*60)
+
+	oldDstMix, err := OpenWithOptions(dstPath+".bak", &Options{})
+	if err != nil {
+		t.Error(err)
+	}
+	t.Log("comparing 2 days archive")
+	compare(dstMix, oldDstMix, int(Now().Add(time.Hour*24*-2+time.Hour).Unix()), int(Now().Unix()))
+}
+
+func TestFetchCompressedMix(t *testing.T) {
+	srcPath := "fetch-mix.cwsp"
+	os.Remove(srcPath)
+
+	srcMix, err := CreateWithOptions(
+		srcPath,
+		[]*Retention{
+			{secondsPerPoint: 1, numberOfPoints: 60 * 60}, // 1s:1h
+			{secondsPerPoint: 60, numberOfPoints: 3 * 60}, // 1m:3h
+			{secondsPerPoint: 600, numberOfPoints: 6 * 6}, // 10m:6h
+		},
+		Mix,
+		0,
+		&Options{
+			Compressed: true, PointsPerBlock: 7200, InMemory: true,
+			MixAggregationSpecs: []MixAggregationSpec{
+				{Method: Average, Percentile: 0},
+				{Method: Sum, Percentile: 0},
+				{Method: Last, Percentile: 0},
+				{Method: Max, Percentile: 0},
+				{Method: Min, Percentile: 0},
+				{Method: Percentile, Percentile: 50},
+				{Method: Percentile, Percentile: 95},
+				{Method: Percentile, Percentile: 99},
+			},
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	points := []*TimeSeriesPoint{}
+	start := 1544478600
+	now := start
+	Now = func() time.Time { return time.Unix(int64(now), 0) }
+	defer func() { Now = func() time.Time { return time.Now() } }()
+
+	for i, total := 0, 4*60*60; i < total; i++ {
+		points = append(points, &TimeSeriesPoint{
+			Time:  int(Now().Unix()),
+			Value: float64(i),
+		})
+		now++
+
+		// To trigger frequent aggregations. Because of the current
+		// implementation logics if all data points are updated in a single
+		// function call, only one aggregation is triggered.
+		if len(points) > 1000 || i == total-1 {
+			if err := srcMix.UpdateMany(points); err != nil {
+				t.Error(err)
+			}
+			points = points[:0]
+		}
+	}
+
+	if err := srcMix.file.(*memFile).dumpOnDisk(srcPath); err != nil {
+		t.Error(err)
+	}
+
+	t.Run("Check1stArchive", func(t *testing.T) {
+		data, err := srcMix.FetchByAggregation(now-10, now, &MixAggregationSpec{Method: Min})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(data.Points(), []TimeSeriesPoint{
+			{Time: 1544492991, Value: 14391}, {Time: 1544492992, Value: 14392}, {Time: 1544492993, Value: 14393},
+			{Time: 1544492994, Value: 14394}, {Time: 1544492995, Value: 14395}, {Time: 1544492996, Value: 14396},
+			{Time: 1544492997, Value: 14397}, {Time: 1544492998, Value: 14398}, {Time: 1544492999, Value: 14399},
+			{Time: 1544493000, Value: math.NaN()},
+		}, cmp.AllowUnexported(TimeSeriesPoint{}), cmpopts.EquateNaNs()); diff != "" {
+			t.Error(diff)
+		}
+	})
+	t.Run("Check2ndArchiveMin", func(t *testing.T) {
+		data, err := srcMix.FetchByAggregation(now-2*60*60, now, &MixAggregationSpec{Method: Min})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(data.Points()[len(data.Points())-42:], []TimeSeriesPoint{
+			{Time: 1544490540, Value: 11940}, {Time: 1544490600, Value: 12000}, {Time: 1544490660, Value: 12060},
+			{Time: 1544490720, Value: 12120}, {Time: 1544490780, Value: 12180}, {Time: 1544490840, Value: 12240},
+			{Time: 1544490900, Value: 12300}, {Time: 1544490960, Value: 12360}, {Time: 1544491020, Value: 12420},
+			{Time: 1544491080, Value: 12480}, {Time: 1544491140, Value: 12540}, {Time: 1544491200, Value: 12600},
+			{Time: 1544491260, Value: 12660}, {Time: 1544491320, Value: 12720}, {Time: 1544491380, Value: 12780},
+			{Time: 1544491440, Value: 12840}, {Time: 1544491500, Value: 12900}, {Time: 1544491560, Value: 12960},
+			{Time: 1544491620, Value: 13020}, {Time: 1544491680, Value: 13080}, {Time: 1544491740, Value: 13140},
+			{Time: 1544491800, Value: 13200}, {Time: 1544491860, Value: 13260}, {Time: 1544491920, Value: 13320},
+			{Time: 1544491980, Value: 13380}, {Time: 1544492040, Value: 13440}, {Time: 1544492100, Value: 13500},
+			{Time: 1544492160, Value: 13560}, {Time: 1544492220, Value: 13620}, {Time: 1544492280, Value: 13680},
+			{Time: 1544492340, Value: 13740}, {Time: 1544492400, Value: 13800}, {Time: 1544492460, Value: 13860},
+			{Time: 1544492520, Value: 13920}, {Time: 1544492580, Value: 13980}, {Time: 1544492640, Value: 14040},
+			{Time: 1544492700, Value: 14100}, {Time: 1544492760, Value: 14160}, {Time: 1544492820, Value: 14220},
+			{Time: 1544492880, Value: 14280}, {Time: 1544492940, Value: 14340}, {Time: 1544493000, Value: math.NaN()},
+		}, cmp.AllowUnexported(TimeSeriesPoint{}), cmpopts.EquateNaNs()); diff != "" {
+			t.Error(diff)
+		}
+	})
+	t.Run("Check3rdArchiveMin", func(t *testing.T) {
+		data, err := srcMix.FetchByAggregation(start, now, &MixAggregationSpec{Method: Min})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(data.Points(), []TimeSeriesPoint{
+			{Time: 1544479200, Value: 600}, {Time: 1544479800, Value: 1200}, {Time: 1544480400, Value: 1800},
+			{Time: 1544481000, Value: 2400}, {Time: 1544481600, Value: 3000}, {Time: 1544482200, Value: 3600},
+			{Time: 1544482800, Value: 4200}, {Time: 1544483400, Value: 4800}, {Time: 1544484000, Value: 5400},
+			{Time: 1544484600, Value: 6000}, {Time: 1544485200, Value: 6600}, {Time: 1544485800, Value: 7200},
+			{Time: 1544486400, Value: 7800}, {Time: 1544487000, Value: 8400}, {Time: 1544487600, Value: 9000},
+			{Time: 1544488200, Value: 9600}, {Time: 1544488800, Value: 10200}, {Time: 1544489400, Value: 10800},
+			{Time: 1544490000, Value: 11400}, {Time: 1544490600, Value: 12000}, {Time: 1544491200, Value: 12600},
+			{Time: 1544491800, Value: 13200}, {Time: 1544492400, Value: 13800}, {Time: 1544493000, Value: math.NaN()},
+		}, cmp.AllowUnexported(TimeSeriesPoint{}), cmpopts.EquateNaNs()); diff != "" {
+			t.Error(diff)
+		}
+	})
+	t.Run("Check3rdArchiveSum", func(t *testing.T) {
+		data, err := srcMix.FetchByAggregation(start, now, &MixAggregationSpec{Method: Sum})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(data.Points(), []TimeSeriesPoint{
+			{Time: 1544479200, Value: 539700}, {Time: 1544479800, Value: 899700},
+			{Time: 1544480400, Value: 1.2597e+06}, {Time: 1544481000, Value: 1.6197e+06},
+			{Time: 1544481600, Value: 1.9797e+06}, {Time: 1544482200, Value: 2.3397e+06},
+			{Time: 1544482800, Value: 2.6997e+06}, {Time: 1544483400, Value: 3.0597e+06},
+			{Time: 1544484000, Value: 3.4197e+06}, {Time: 1544484600, Value: 3.7797e+06},
+			{Time: 1544485200, Value: 4.1397e+06}, {Time: 1544485800, Value: 4.4997e+06},
+			{Time: 1544486400, Value: 4.8597e+06}, {Time: 1544487000, Value: 5.2197e+06},
+			{Time: 1544487600, Value: 5.5797e+06}, {Time: 1544488200, Value: 5.9397e+06},
+			{Time: 1544488800, Value: 6.2997e+06}, {Time: 1544489400, Value: 6.6597e+06},
+			{Time: 1544490000, Value: 7.0197e+06}, {Time: 1544490600, Value: 7.3797e+06},
+			{Time: 1544491200, Value: 7.7397e+06}, {Time: 1544491800, Value: 8.0997e+06},
+			{Time: 1544492400, Value: 8.4597e+06}, {Time: 1544493000, Value: math.NaN()},
+		}, cmp.AllowUnexported(TimeSeriesPoint{}), cmpopts.EquateNaNs()); diff != "" {
+			t.Error(diff)
+		}
+	})
+
+	t.Run("CheckDuplicateDataPoints", func(t *testing.T) {
+		for i, arc := range srcMix.archives {
+			m := map[int]bool{}
+			for _, block := range arc.blockRanges {
+				if block.start == 0 {
+					continue
+				}
+
+				buf := make([]byte, arc.blockSize)
+				if err := arc.whisper.fileReadAt(buf, int64(arc.blockOffset(block.index))); err != nil {
+					panic(err)
+				}
+
+				dps, _, err := arc.ReadFromBlock(buf, []dataPoint{}, block.start, block.end)
+				if err != nil {
+					panic(err)
+				}
+
+				for _, dp := range dps {
+					if m[dp.interval] {
+						var spec string
+						if i > 0 {
+							spec = " " + arc.aggregationSpec.String()
+						}
+						t.Errorf("archive %d %s%s contains a duplicate timestamp: %d", i, arc.String(), spec, dp.interval)
+					} else {
+						m[dp.interval] = true
+					}
+				}
+			}
+		}
+	})
+}
+
 func BenchmarkWriteCompressed(b *testing.B) {
 	fpath := "benchmark_write.cwsp"
 	os.Remove(fpath)
@@ -1102,5 +1437,37 @@ func BenchmarkWriteStandard(b *testing.B) {
 	}
 	if err := cwhisper.Close(); err != nil {
 		b.Fatal(err)
+	}
+}
+
+func TestAggregatePercentile(t *testing.T) {
+	for _, c := range []struct {
+		percentile float32
+		expect     float64
+		vals       []float64
+	}{
+		{50, 4.0, []float64{1, 2, 3, 4, 5, 6, 7}},
+		{50, 4.5, []float64{1, 2, 3, 4, 5, 6, 7, 8}},
+		{50, 1.0, []float64{1}},
+		{50, math.NaN(), []float64{}},
+		{90, 9.1, []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}},
+		{99, 99.01, func() []float64 {
+			var vals []float64
+			for i := 0; i < 100; i++ {
+				vals = append(vals, float64(i+1))
+			}
+			return vals
+		}()},
+		{99.9, 999.001015, func() []float64 {
+			var vals []float64
+			for i := 0; i < 1000; i++ {
+				vals = append(vals, float64(i+1))
+			}
+			return vals
+		}()},
+	} {
+		if got, want := aggregatePercentile(c.percentile, c.vals), c.expect; math.Trunc(got*10000) != math.Trunc(want*10000) && !(math.IsNaN(got) && math.IsNaN(want)) {
+			t.Errorf("aggregatePercentile(%.2f, %v) = %f; want %f", c.percentile, c.vals, got, want)
+		}
 	}
 }
