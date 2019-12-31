@@ -90,12 +90,12 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 		i += packInt(b, archive.blockCount, i)
 		i += packFloat32(b, archive.avgCompressedPointSize, i)
 
-		var mixSpec int
+		var mixSpecSize int
 		if archive.aggregationSpec != nil {
 			b[i] = byte(archive.aggregationSpec.Method)
 			i += ByteSize
 			i += packFloat32(b, archive.aggregationSpec.Percentile, i)
-			mixSpec = 5
+			mixSpecSize = ByteSize + FloatSize
 		}
 
 		i += packInt(b, archive.cblock.index, i)
@@ -114,9 +114,9 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 		i += packInt(b, int(archive.stats.discard.oldInterval), i)
 		i += packInt(b, int(archive.stats.extended), i)
 
-		i += FreeCompressedArchiveInfoSize - mixSpec
+		i += FreeCompressedArchiveInfoSize - mixSpecSize
 
-		if FreeCompressedArchiveInfoSize < mixSpec {
+		if FreeCompressedArchiveInfoSize < mixSpecSize {
 			panic("out of FreeCompressedArchiveInfoSize") // a panic that should never happens
 		}
 	}

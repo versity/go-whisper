@@ -39,7 +39,7 @@ func main() {
 	}
 
 	if db.Extended {
-		fmt.Println("file is extended.")
+		fmt.Println("file has been extended.")
 	}
 }
 
