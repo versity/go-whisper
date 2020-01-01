@@ -89,6 +89,8 @@ type Options struct {
 
 	MixAggregationSpecs        []MixAggregationSpec
 	MixAvgCompressedPointSizes map[int][]float32
+
+	SIMV bool // single interval multiple values
 }
 
 type MixAggregationSpec struct {
@@ -96,6 +98,7 @@ type MixAggregationSpec struct {
 	Percentile float32
 }
 
+// a simple file interface, mainly used for testing and migration.
 type file interface {
 	Seek(offset int64, whence int) (ret int64, err error)
 	Fd() uintptr
@@ -125,8 +128,8 @@ type Whisper struct {
 	compVersion            uint8
 	pointsPerBlock         int
 	avgCompressedPointSize float32
-
-	crc32 uint32
+	crc32                  uint32
+	flags                  int // assumption: flags is init during whisper file creation
 
 	opts     *Options
 	Extended bool
@@ -368,6 +371,9 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 
 	whisper.compressed = options.Compressed
 	whisper.compVersion = 1
+	if options.SIMV {
+		whisper.compVersion = 2
+	}
 	whisper.pointsPerBlock = options.PointsPerBlock
 	whisper.avgCompressedPointSize = options.PointSize
 	for _, retention := range retentions {
@@ -1632,3 +1638,5 @@ func (mas *MixAggregationSpec) String() string {
 	}
 	return mas.Method.String()
 }
+
+func (whisper *Whisper) SIMV() bool { return whisper.flags&0x01 == 1 }

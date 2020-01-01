@@ -98,6 +98,10 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 			mixSpecSize = ByteSize + FloatSize
 		}
 
+		if whisper.compVersion > 1 {
+			i += packInt(b, whisper.flags, i)
+		}
+
 		i += packInt(b, archive.cblock.index, i)
 		i += packInt(b, archive.cblock.p0.interval, i)
 		i += packFloat64(b, archive.cblock.p0.value, i)
@@ -215,6 +219,11 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 			offset += ByteSize
 			arc.aggregationSpec.Percentile = unpackFloat32(b[offset : offset+FloatSize])
 			offset += FloatSize
+		}
+
+		if whisper.compVersion == 2 {
+			whisper.flags = unpackInt(b[offset : offset+IntSize])
+			offset += IntSize
 		}
 
 		arc.cblock.index = unpackInt(b[offset : offset+IntSize])
@@ -447,7 +456,7 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 	alignedPoints := alignPoints(archive, points)
 
 	// Note: in the current design, mix aggregation doesn't have any buffer in
-	// higer archives
+	// higer archives.
 	if !archive.hasBuffer() {
 		rotated, err := archive.appendToBlockAndRotate(alignedPoints)
 		if err != nil {
