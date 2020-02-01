@@ -277,9 +277,10 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 			{Time: next(0) - 1, Value: math.NaN()},
 			{Time: next(0) - 0, Value: 15},
 		}
-		if ts, err := whisper.Fetch(next(0)-15, next(0)); err != nil {
+		if ts, err := whisper.Fetch(next(0)-50, next(0)); err != nil {
 			t.Error(err)
 		} else if diff := cmp.Diff(ts.Points(), expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
+			pretty.Println(ts.Points())
 			t.Error(diff)
 		}
 	})

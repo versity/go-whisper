@@ -20,6 +20,9 @@ var (
 	CompressedMetadataSize     = 28 + FreeCompressedMetadataSize
 	FreeCompressedMetadataSize = 16
 
+	CompressedFlagSize           = 4
+	FreeCompressedMetadataSizeV2 = 12
+
 	VersionSize = 1
 
 	CompressedArchiveInfoSize     = 92 + FreeCompressedArchiveInfoSize
@@ -79,8 +82,16 @@ func (whisper *Whisper) WriteHeaderCompressed() (err error) {
 	i += packInt(b, whisper.pointsPerBlock, i)
 	i += packInt(b, len(whisper.archives), i)
 	i += packFloat32(b, whisper.avgCompressedPointSize, i)
-	i += packInt(b, 0, i) // crc32 always write at the end of whisper meta info header and before archive header
-	i += FreeCompressedMetadataSize
+	i += packInt(b, 0, i)
+
+	if whisper.compVersion == 1 {
+		i += FreeCompressedMetadataSize
+	} else if whisper.compVersion == 2 {
+		i += packInt(b, int(whisper.flags), i)
+		i += FreeCompressedMetadataSizeV2
+	} else {
+		return fmt.Errorf("unknown cwhisper version %d", whisper.compVersion)
+	}
 
 	for _, archive := range whisper.archives {
 		i += packInt(b, archive.offset, i)
@@ -183,7 +194,16 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 	offset += FloatSize
 	whisper.crc32 = uint32(unpackInt(b[offset : offset+IntSize]))
 	offset += IntSize
-	offset += FreeCompressedMetadataSize
+
+	if whisper.compVersion == 1 {
+		offset += FreeCompressedMetadataSize
+	} else if whisper.compVersion == 2 {
+		whisper.flags = uint32(unpackInt(b[offset : offset+IntSize]))
+		offset += IntSize
+		offset += FreeCompressedMetadataSizeV2
+	} else {
+		return fmt.Errorf("unknown cwhisper version %d", whisper.compVersion)
+	}
 
 	whisper.archives = make([]*archiveInfo, archiveCount)
 	for i := 0; i < archiveCount; i++ {
@@ -447,88 +467,95 @@ func (whisper *Whisper) archiveUpdateManyCompressed(archive *archiveInfo, points
 	alignedPoints := alignPoints(archive, points)
 
 	// Note: in the current design, mix aggregation doesn't have any buffer in
-	// higer archives
-	if !archive.hasBuffer() {
-		rotated, err := archive.appendToBlockAndRotate(alignedPoints)
-		if err != nil {
-			return err
-		}
-
-		if !(whisper.aggregationMethod == Mix && rotated) {
-			return nil
-		}
-
-		return whisper.propagateToMixedArchivesCompressed()
-	}
-
-	baseIntervalsPerUnit, currentUnit, minInterval := archive.getBufferInfo()
-	bufferUnitPointsCount := archive.next.secondsPerPoint / archive.secondsPerPoint
-	for aindex := 0; aindex < len(alignedPoints); {
-		dp := alignedPoints[aindex]
-		bpBaseInterval := archive.AggregateInterval(dp.interval)
-
-		// NOTE: current implementation expects data points to be monotonically
-		// increasing in time
-		if minInterval != 0 && bpBaseInterval < minInterval {
-			archive.stats.discard.oldInterval++
-			aindex++
-			continue
-		}
-
-		// check if buffer is full
-		if baseIntervalsPerUnit[currentUnit] == 0 || baseIntervalsPerUnit[currentUnit] == bpBaseInterval {
-			aindex++
-			baseIntervalsPerUnit[currentUnit] = bpBaseInterval
-
-			// TODO: not efficient if many data points are being written in one call
-			offset := currentUnit*bufferUnitPointsCount + (dp.interval-bpBaseInterval)/archive.secondsPerPoint
-			copy(archive.buffer[offset*PointSize:], dp.Bytes())
-
-			continue
-		}
-
-		currentUnit = (currentUnit + 1) % len(baseIntervalsPerUnit)
-		baseIntervalsPerUnit[currentUnit] = 0
-
-		// flush buffer
-		buffer := archive.getBufferByUnit(currentUnit)
-		dps := unpackDataPointsStrict(buffer)
-
-		// reset buffer
-		for i := range buffer {
-			buffer[i] = 0
-		}
-
-		if len(dps) <= 0 {
-			continue
-		}
-
-		if _, err := archive.appendToBlockAndRotate(dps); err != nil {
-			// TODO: record and continue?
-			return err
-		}
-
-		// propagate
-		lower := archive.next
-		lowerIntervalStart := archive.AggregateInterval(dps[0].interval)
-
-		var knownValues []float64
-		for _, dPoint := range dps {
-			knownValues = append(knownValues, dPoint.value)
-		}
-
-		knownPercent := float32(len(knownValues)) / float32(lower.secondsPerPoint/archive.secondsPerPoint)
-		// check we have enough data points to propagate a value
-		if knownPercent >= whisper.xFilesFactor {
-			aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
-			point := &TimeSeriesPoint{lowerIntervalStart, aggregateValue}
-
-			// TODO: consider migrating to a non-recursive propagation implementation like mix policy
-			if err := whisper.archiveUpdateManyCompressed(lower, []*TimeSeriesPoint{point}); err != nil {
-				return err
+	// higer archives.
+	if archive.hasBuffer() {
+		if bufferPoints := unpackDataPointsStrict(archive.buffer); len(bufferPoints) > 0 {
+			alignedPoints = append(bufferPoints, alignedPoints...)
+			// reset buffer
+			for i := range archive.buffer {
+				archive.buffer[i] = 0
 			}
 		}
 	}
+
+	rotated, err := archive.appendToBlockAndRotate(alignedPoints)
+	if err != nil {
+		return err
+	}
+	if !rotated {
+		return nil
+	}
+
+	return whisper.batchedPropagateCompressed()
+
+	// baseIntervalsPerUnit, currentUnit, minInterval := archive.getBufferInfo()
+	// bufferUnitPointsCount := archive.next.secondsPerPoint / archive.secondsPerPoint
+	// for aindex := 0; aindex < len(alignedPoints); {
+	// 	dp := alignedPoints[aindex]
+	// 	bpBaseInterval := archive.AggregateInterval(dp.interval)
+
+	// 	// // NOTE: current implementation expects data points to be monotonically
+	// 	// // increasing in time
+	// 	// if minInterval != 0 && bpBaseInterval < minInterval {
+	// 	// 	archive.stats.discard.oldInterval++
+	// 	// 	aindex++
+	// 	// 	continue
+	// 	// }
+
+	// 	// check if buffer is full
+	// 	if baseIntervalsPerUnit[currentUnit] == 0 || baseIntervalsPerUnit[currentUnit] == bpBaseInterval {
+	// 		aindex++
+	// 		baseIntervalsPerUnit[currentUnit] = bpBaseInterval
+
+	// 		// TODO: not efficient if many data points are being written in one call
+	// 		offset := currentUnit*bufferUnitPointsCount + (dp.interval-bpBaseInterval)/archive.secondsPerPoint
+	// 		copy(archive.buffer[offset*PointSize:], dp.Bytes())
+
+	// 		continue
+	// 	}
+
+	// 	currentUnit = (currentUnit + 1) % len(baseIntervalsPerUnit)
+	// 	baseIntervalsPerUnit[currentUnit] = 0
+
+	// 	// flush buffer
+	// 	buffer := archive.getBufferByUnit(currentUnit)
+	// 	dps := unpackDataPointsStrict(buffer)
+
+	// 	// reset buffer
+	// 	for i := range buffer {
+	// 		buffer[i] = 0
+	// 	}
+
+	// 	if len(dps) <= 0 {
+	// 		continue
+	// 	}
+
+	// 	if _, err := archive.appendToBlockAndRotate(dps); err != nil {
+	// 		// TODO: record and continue?
+	// 		return err
+	// 	}
+
+	// 	// propagate
+	// 	lower := archive.next
+	// 	lowerIntervalStart := archive.AggregateInterval(dps[0].interval)
+
+	// 	var knownValues []float64
+	// 	for _, dPoint := range dps {
+	// 		knownValues = append(knownValues, dPoint.value)
+	// 	}
+
+	// 	knownPercent := float32(len(knownValues)) / float32(lower.secondsPerPoint/archive.secondsPerPoint)
+	// 	// check we have enough data points to propagate a value
+	// 	if knownPercent >= whisper.xFilesFactor {
+	// 		aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
+	// 		point := &TimeSeriesPoint{lowerIntervalStart, aggregateValue}
+
+	// 		// TODO: consider migrating to a non-recursive propagation implementation like mix policy
+	// 		if err := whisper.archiveUpdateManyCompressed(lower, []*TimeSeriesPoint{point}); err != nil {
+	// 			return err
+	// 		}
+	// 	}
+	// }
 
 	return nil
 }
@@ -818,6 +845,11 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 	bw.buf[0] &= 0xFF ^ (1<<uint(a.cblock.lastByteBitPos+1) - 1)
 	bw.buf[1] = 0
 
+	var start = a.blockRanges[a.cblock.index].start
+	var end = a.blockRanges[a.cblock.index].end
+	var prevStart = a.blockRanges[(a.cblock.index+1)%len(a.blockRanges)].start
+	var prevEnd = a.blockRanges[(a.cblock.index+1)%len(a.blockRanges)].end
+
 	defer func() {
 		a.cblock.lastByte = bw.buf[bw.index]
 		a.cblock.lastByteBitPos = int(bw.bitPos)
@@ -844,8 +876,9 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 
 		written = bw.index + 1
 
-		a.blockRanges[a.cblock.index].start = a.cblock.p0.interval
-		a.blockRanges[a.cblock.index].end = a.cblock.pn1.interval
+		// a.blockRanges[a.cblock.index].start = a.cblock.p0.interval
+		a.blockRanges[a.cblock.index].start = start
+		a.blockRanges[a.cblock.index].end = end
 		a.blockRanges[a.cblock.index].count = a.cblock.count
 		a.blockRanges[a.cblock.index].crc32 = a.cblock.crc32
 	}()
@@ -858,6 +891,10 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 
 	for i, p := range ps {
 		if p.interval == 0 {
+			continue
+		}
+		if (prevStart > 0 && p.interval <= prevStart) || (prevEnd > 0 && p.interval <= prevEnd) {
+			a.stats.discard.oldInterval++
 			continue
 		}
 
@@ -1036,6 +1073,13 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 		a.cblock.pn2 = a.cblock.pn1
 		a.cblock.pn1 = p
 		a.cblock.count++
+
+		if start > p.interval {
+			start = p.interval
+		}
+		if end == 0 || end < p.interval {
+			end = p.interval
+		}
 
 		if debugCompress {
 			start := oldBwIndex
@@ -1278,12 +1322,12 @@ readloop:
 		if start <= p.interval && p.interval <= end {
 			dst = append(dst, p)
 		}
-		if p.interval >= end {
-			if debugCompress {
-				fmt.Printf("ended by hitting end interval\n")
-			}
-			break
-		}
+		// if p.interval >= end {
+		// 	if debugCompress {
+		// 		fmt.Printf("ended by hitting end interval\n")
+		// 	}
+		// 	break
+		// }
 	}
 
 	endOffset := br.current
@@ -1679,7 +1723,7 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 	return nil
 }
 
-func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
+func (whisper *Whisper) batchedPropagateCompressed() error {
 	var largestSPP int
 	var lastArchive *archiveInfo
 	var spps []int
@@ -1825,7 +1869,9 @@ func (whisper *Whisper) propagateToMixedArchivesCompressed() error {
 
 			dps[i].interval = gdp.interval
 
-			if arc.aggregationSpec.Method == Percentile {
+			if arc.aggregationSpec == nil {
+				dps[i].value = aggregate(whisper.aggregationMethod, gdp.values)
+			} else if arc.aggregationSpec.Method == Percentile {
 				dps[i].value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
 			} else {
 				dps[i].value = aggregate(arc.aggregationSpec.Method, gdp.values)

@@ -89,6 +89,8 @@ type Options struct {
 
 	MixAggregationSpecs        []MixAggregationSpec
 	MixAvgCompressedPointSizes map[int][]float32
+
+	SIMV bool // single interval multiple values
 }
 
 type MixAggregationSpec struct {
@@ -96,6 +98,7 @@ type MixAggregationSpec struct {
 	Percentile float32
 }
 
+// a simple file interface, mainly used for testing and migration.
 type file interface {
 	Seek(offset int64, whence int) (ret int64, err error)
 	Fd() uintptr
@@ -125,8 +128,8 @@ type Whisper struct {
 	compVersion            uint8
 	pointsPerBlock         int
 	avgCompressedPointSize float32
-
-	crc32 uint32
+	crc32                  uint32
+	flags                  uint32 // assumption: flags is init during whisper file creation
 
 	opts     *Options
 	Extended bool
@@ -367,7 +370,7 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	whisper.opts = options
 
 	whisper.compressed = options.Compressed
-	whisper.compVersion = 1
+	whisper.compVersion = 2
 	whisper.pointsPerBlock = options.PointsPerBlock
 	whisper.avgCompressedPointSize = options.PointSize
 	for _, retention := range retentions {
@@ -649,7 +652,7 @@ func (whisper *Whisper) initMetaInfo() {
 		prevArc := whisper.archives[i-1]
 		prevArc.next = arc
 
-		if whisper.aggregationMethod != Mix {
+		if whisper.aggregationMethod != Mix && whisper.compVersion == 1 {
 			prevArc.bufferSize = arc.secondsPerPoint / prevArc.secondsPerPoint * PointSize * bufferCount
 		}
 	}
@@ -673,7 +676,8 @@ func (whisper *Whisper) writeHeader() (err error) {
 }
 
 func (whisper *Whisper) crc32Offset() int {
-	return len(compressedMagicString) + VersionSize + CompressedMetadataSize - 4 - FreeCompressedMetadataSize
+	const crc32Size = IntSize
+	return len(compressedMagicString) + VersionSize + CompressedMetadataSize - crc32Size - FreeCompressedMetadataSize
 }
 
 /*
@@ -1632,3 +1636,5 @@ func (mas *MixAggregationSpec) String() string {
 	}
 	return mas.Method.String()
 }
+
+func (whisper *Whisper) SIMV() bool { return whisper.flags&0x01 == 1 }
