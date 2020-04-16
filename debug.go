@@ -1,26 +1,31 @@
 package whisper
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"math"
 	"time"
 )
 
-func (whisper *Whisper) CheckIntegrity() {
+func (whisper *Whisper) CheckIntegrity() error {
 	meta := make([]byte, whisper.MetadataSize())
 	if err := whisper.fileReadAt(meta, 0); err != nil {
 		panic(err)
 	}
 
+	// set crc32 in the header to 0 for re-calculation
+	copy(meta[whisper.crc32Offset():], make([]byte, 4))
+
 	var msg string
-	empty := [4]byte{}
-	copy(meta[whisper.crc32Offset():], empty[:])
-	metacrc := crc32(meta, 0)
+	var metacrc = crc32(meta, 0)
 	if metacrc != whisper.crc32 {
 		msg += fmt.Sprintf("    header crc: disk: %08x cal: %08x\n", whisper.crc32, metacrc)
 	}
 
 	for _, arc := range whisper.archives {
+		if arc.avgCompressedPointSize <= 0.0 || math.IsNaN(float64(arc.avgCompressedPointSize)) {
+			msg += fmt.Sprintf("    archive.%s has bad avgCompressedPointSize: %f\n", arc.Retention, arc.avgCompressedPointSize)
+		}
 		for _, block := range arc.blockRanges {
 			if block.start == 0 {
 				continue
@@ -42,15 +47,15 @@ func (whisper *Whisper) CheckIntegrity() {
 
 			crc := crc32(buf[:endOffset], 0)
 			if crc != block.crc32 {
-				msg += fmt.Sprintf("    archive.%d.block.%d crc32: %08x check: %08x startOffset: %d endOffset: %d/%d\n", arc.secondsPerPoint, block.index, block.crc32, crc, arc.blockOffset(block.index), endOffset, int(arc.blockOffset(block.index))+endOffset)
+				msg += fmt.Sprintf("    archive.%s.block.%d crc32: %08x check: %08x startOffset: %d endOffset: %d/%d\n", arc.Retention, block.index, block.crc32, crc, arc.blockOffset(block.index), endOffset, int(arc.blockOffset(block.index))+endOffset)
 			}
 		}
 	}
 
 	if msg != "" {
-		fmt.Printf("file: %s\n%s", whisper.file.Name(), msg)
-		os.Exit(1)
+		return errors.New(msg)
 	}
+	return nil
 }
 
 func (whisper *Whisper) Dump(all, showDecompressionInfo bool) {

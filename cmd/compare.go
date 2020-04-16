@@ -24,6 +24,12 @@ func main() {
 	muteThreshold := flag.Int("mute-if-less", 2, "do not alarm if diff of points is less than specified.")
 	flag.BoolVar(verbose, "v", false, "be overly and nicely talkive")
 	flag.Parse()
+	if len(flag.Args()) != 2 {
+		fmt.Println("usage: cverify metric.wsp metric.cwsp")
+		fmt.Println("purpose: check if two whisper files are containing the same data, made for verify migration result.")
+		flag.PrintDefaults()
+		os.Exit(1)
+	}
 
 	var quarantines [][2]int
 	if *quarantinesRaw != "" {
@@ -170,10 +176,16 @@ func main() {
 		}
 	}
 	if db1.IsCompressed() {
-		db1.CheckIntegrity()
+		if err := db1.CheckIntegrity(); err != nil {
+			fmt.Printf("integrity: %s\n%s", file1, err)
+			bad = true
+		}
 	}
 	if db2.IsCompressed() {
-		db2.CheckIntegrity()
+		if err := db2.CheckIntegrity(); err != nil {
+			fmt.Printf("integrity: %s\n%s", file2, err)
+			bad = true
+		}
 	}
 
 	if bad {
