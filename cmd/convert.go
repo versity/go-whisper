@@ -65,10 +65,6 @@ func main() {
 		}
 	}
 
-	if *oneoff {
-		*rate = 65536
-	}
-
 	var progressDB = *homdDir + "/progress.db"
 	var pidFile = *homdDir + "/pid"
 	var taskc = make(chan string, *rate)
