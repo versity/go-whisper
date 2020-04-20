@@ -217,6 +217,11 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 	if err != nil {
 		return fmt.Errorf("convert: failed to open %s: %s", path, err)
 	}
+	defer func() {
+		if err := db.File().Close(); err != nil {
+			fmt.Printf("convert: failed to close converted file %s: %s", path, err)
+		}
+	}()
 
 	if db.IsCompressed() {
 		if debugf {
@@ -268,6 +273,8 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 	if err != nil {
 		return fmt.Errorf("convert: failed to open %s: %s", tmpPath, err)
 	}
+	defer cfile.Close()
+
 	cstat, err := cfile.Stat()
 	if err != nil {
 		return fmt.Errorf("convert: failed to stat %s: %s", tmpPath, err)
@@ -283,10 +290,6 @@ func convert(path string, progressc chan string, convertingCount *int64, convert
 	if _, err := io.Copy(db.File(), cfile); err != nil {
 		os.Remove(path) // original file is most likely corrupted
 		return fmt.Errorf("convert: failed to copy compressed data for %s: %s", path, err)
-	}
-
-	if err := db.File().Close(); err != nil {
-		return fmt.Errorf("convert: failed to close converted file %s: %s", path, err)
 	}
 
 	return nil
