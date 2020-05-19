@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"regexp"
@@ -41,6 +42,7 @@ const (
 // Note: 4 bytes long in Whisper Header, 1 byte long in Archive Header
 type AggregationMethod int
 
+const Unknown AggregationMethod = -1
 const (
 	Average AggregationMethod = iota + 1
 	Sum
@@ -75,13 +77,35 @@ func (am AggregationMethod) String() string {
 	return fmt.Sprintf("%d", am)
 }
 
-// func ParseAggregationMethods() {}
+func ParseAggregationMethod(am string) AggregationMethod {
+	switch am {
+	case "average", "avg":
+		return Average
+	case "sum":
+		return Sum
+	case "first":
+		return First
+	case "last":
+		return Last
+	case "max":
+		return Max
+	case "min":
+		return Min
+	case "mix":
+		return Mix
+	case "percentile":
+		return Percentile
+	}
+	return Unknown
+}
 
 type Options struct {
 	Sparse bool
 	FLock  bool
 
-	Compressed     bool
+	Compressed bool
+	// It's a hint, used if the retention is big enough, more in
+	// Retention.calculateSuitablePointsPerBlock
 	PointsPerBlock int
 	PointSize      float32
 	InMemory       bool
@@ -91,6 +115,8 @@ type Options struct {
 	MixAvgCompressedPointSizes map[int][]float32
 
 	SIMV bool // single interval multiple values
+
+	IgnoreNowOnWrite bool
 }
 
 type MixAggregationSpec struct {
@@ -129,7 +155,7 @@ type Whisper struct {
 	pointsPerBlock         int
 	avgCompressedPointSize float32
 	crc32                  uint32
-	flags                  uint32 // assumption: flags is init during whisper file creation
+	flags                  uint32 // assumption: flags is set during whisper file creation
 
 	opts     *Options
 	Extended bool
@@ -842,6 +868,10 @@ func (whisper *Whisper) UpdateMany(points []*TimeSeriesPoint) (err error) {
 	return whisper.UpdateManyForArchive(points, -1)
 }
 
+// Note: for compressed format, extensions is triggered after update is
+// done, so updates of the same data set being done in one
+// UpdateManyForArchive call would have different result in file than in
+// many UpdateManyForArchive calls.
 func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRetention int) (err error) {
 	// recover panics and return as error
 	defer func() {
@@ -863,11 +893,17 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 			continue
 		}
 
-		currentPoints, points = extractPoints(points, now, archive.MaxRetention())
+		if whisper.opts.IgnoreNowOnWrite {
+			currentPoints = points
+			points = []*TimeSeriesPoint{}
+		} else {
+			currentPoints, points = extractPoints(points, now, archive.MaxRetention())
+		}
 
 		if len(currentPoints) == 0 {
 			continue
 		}
+
 		// reverse currentPoints
 		reversePoints(currentPoints)
 		if whisper.compressed {
@@ -878,6 +914,9 @@ func (whisper *Whisper) UpdateManyForArchive(points []*TimeSeriesPoint, targetRe
 				break
 			}
 
+			// TODO: add a new options to update data points in smaller chunks if
+			// it exceeeds certain size, so extension could be triggered
+			// properly: ChunkUpdateSize
 			err = whisper.archiveUpdateManyCompressed(archive, currentPoints)
 		} else {
 			err = whisper.archiveUpdateMany(archive, currentPoints)
@@ -1067,6 +1106,11 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 	if len(knownValues) == 0 {
 		return false, nil
 	}
+
+	if lowerIntervalStart == 1526241600 {
+		log.Printf("knownValues = %+v\n", knownValues)
+	}
+
 	knownPercent := float32(len(knownValues)) / float32(len(series))
 	if knownPercent < whisper.xFilesFactor { // check we have enough data points to propagate a value
 		return false, nil
@@ -1338,6 +1382,7 @@ func (r *Retention) SecondsPerPoint() int                   { return r.secondsPe
 func (r *Retention) NumberOfPoints() int                    { return r.numberOfPoints }
 func (r *Retention) SetAvgCompressedPointSize(size float32) { r.avgCompressedPointSize = size }
 
+// NOTE: the calculation result is not saved on disk
 func (r *Retention) calculateSuitablePointsPerBlock(defaultSize int) int {
 	if defaultSize == 0 {
 		defaultSize = DefaultPointsPerBlock
@@ -1530,7 +1575,7 @@ func aggregate(method AggregationMethod, knownValues []float64) float64 {
 		}
 		return min
 	}
-	panic("Invalid aggregation method")
+	panic(fmt.Sprintf("Invalid aggregation method: %d", method))
 }
 
 func packInt(b []byte, v, i int) int {

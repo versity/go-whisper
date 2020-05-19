@@ -203,7 +203,7 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 
 		for i, p := range dps {
 			// continue
-			fmt.Printf("  % 4d %d %s: %f\n", i, p.interval, toTime(p.interval), p.value)
+			fmt.Printf("  % 4d %d %s: %v\n", i, p.interval, toTime(p.interval), p.value)
 		}
 	}
 }

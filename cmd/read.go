@@ -22,6 +22,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+
 		body = string(in)
 	}
 
