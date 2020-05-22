@@ -68,7 +68,7 @@ func main() {
 	var bad bool
 	for index, ret := range db1.Retentions() {
 		from := int(whisper.Now().Unix()) - ret.MaxRetention() + ret.SecondsPerPoint()*60
-		until := int(whisper.Now().Unix()) - 3600*8
+		until := int(whisper.Now().Unix())
 
 		if *verbose {
 			fmt.Printf("%d %s: from = %+v until = %+v\n", index, ret, from, until)

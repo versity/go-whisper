@@ -503,7 +503,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 					{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
 					{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
 				},
-				Average,
+				Sum,
 				0,
 				&Options{Compressed: true, PointsPerBlock: 7200, InMemory: inMemory},
 			)
@@ -517,7 +517,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 					{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
 					{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
 				},
-				Average,
+				Sum,
 				0,
 				&Options{Compressed: false, PointsPerBlock: 7200, InMemory: inMemory},
 			)
@@ -576,9 +576,9 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 
 					if *fullTest3 {
 						if *cacheTest3Data {
-							if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
-								t.Fatal(err)
-							}
+							// if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
+							// 	t.Fatal(err)
+							// }
 							for _, p := range ps {
 								if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
 									t.Fatal(err)
@@ -660,27 +660,92 @@ func TestCompressedWhisperOutOfOrderWrite(t *testing.T) {
 	os.Remove(fpath + ".cwsp")
 
 	rets := []*Retention{
-		{secondsPerPoint: 1, numberOfPoints: 30},  // 1s:30s
-		{secondsPerPoint: 10, numberOfPoints: 30}, // 10s:5m
-		{secondsPerPoint: 60, numberOfPoints: 60}, // 1m:1h
+		{secondsPerPoint: 1, numberOfPoints: 7200},
+		{secondsPerPoint: 100, numberOfPoints: 1200},
+		{secondsPerPoint: 300, numberOfPoints: 1200},
 	}
 	cwhisper, err := CreateWithOptions(
-		fpath+".cwsp", rets, Average, 0,
-		&Options{Compressed: true, PointsPerBlock: 5, InMemory: false},
+		fpath+".cwsp", rets, Sum, 0,
+		&Options{
+			Compressed: true, PointsPerBlock: 1200,
+			InMemory: false, IgnoreNowOnWrite: true,
+		},
 	)
 	if err != nil {
 		panic(err)
 	}
 	ncwhisper, err := CreateWithOptions(
-		fpath, rets, Average, 0,
-		&Options{Compressed: false, PointsPerBlock: 5, InMemory: false},
+		fpath, rets, Sum, 0,
+		&Options{
+			Compressed: false, PointsPerBlock: 1200,
+			InMemory: false, IgnoreNowOnWrite: true,
+		},
 	)
 	if err != nil {
 		panic(err)
 	}
+
+	// dataDebugFile, err := os.Create(fmt.Sprintf("tmp/test4_ooo.data"))
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+
+	var start = 1590046238
+	var loop = 123
+	for i := 0; i < loop; i++ {
+		var ps = make([]*TimeSeriesPoint, 60*3)
+
+		for j := 0; j < 60*3; j++ {
+			p := &TimeSeriesPoint{
+				Value: float64(rand.Intn(3000)),
+				Time:  start + i*loop + j,
+			}
+			// if p.Time == 4026531840 {
+			// 	panic(4026531840)
+			// }
+			var index = rand.Intn(60 * 3)
+			for k := 0; k < 60*3; k++ {
+				if ps[(index+k)%(60*3)] == nil {
+					ps[(index+k)%(60*3)] = p
+					break
+				}
+			}
+		}
+
+		// for _, p := range ps {
+		// 	if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
+		// 		t.Fatal(err)
+		// 	}
+		// }
+
+		if err := cwhisper.UpdateMany(ps[0:90]); err != nil {
+			t.Fatal(err)
+		}
+		if err := ncwhisper.UpdateMany(ps[0:90]); err != nil {
+			t.Fatal(err)
+		}
+		if err := cwhisper.UpdateMany(ps[90:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := ncwhisper.UpdateMany(ps[90:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// dataDebugFile.Close()
+
+	t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", start+loop*60*3), fpath, fpath+".cwsp")
+	output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", start+loop*60*3), fpath, fpath+".cwsp").CombinedOutput()
+	if err != nil {
+		t.Log(string(output))
+		t.Error(err)
+	}
+
 	cwhisper.Close()
 	ncwhisper.Close()
 }
+
+// TODO: TestCompressedVersion1BackwardCompartible
 
 func TestCompressTo(t *testing.T) {
 	fpath := "compress_to.wsp"

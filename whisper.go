@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"os"
 	"regexp"
@@ -189,6 +188,8 @@ type archiveInfo struct {
 	next    *archiveInfo
 	whisper *Whisper
 
+	// NOTE: buffer design deprecated for v2 and mix
+	//
 	// why having buffer:
 	//
 	// original reasons:
@@ -559,6 +560,8 @@ func validateRetentions(retentions Retentions) error {
 			return fmt.Errorf("Each archive must have at least enough points to consolidate to the next archive (archive%v consolidates %v of archive%v's points but it has only %v total points)", i+1, nextRetention.secondsPerPoint/retention.secondsPerPoint, i, retention.numberOfPoints)
 		}
 	}
+
+	// TODO: cwhisper has more strict retention limit, everything is aggregated from the first archive/retention
 	return nil
 }
 
@@ -1107,15 +1110,19 @@ func (whisper *Whisper) propagate(timestamp int, higher, lower *archiveInfo) (bo
 		return false, nil
 	}
 
-	if lowerIntervalStart == 1526241600 {
-		log.Printf("knownValues = %+v\n", knownValues)
-	}
+	// if lowerIntervalStart == 1589688000 {
+	// 	log.Printf("knownValues = %+v\n", knownValues)
+	// }
 
 	knownPercent := float32(len(knownValues)) / float32(len(series))
 	if knownPercent < whisper.xFilesFactor { // check we have enough data points to propagate a value
 		return false, nil
 	} else {
 		aggregateValue := aggregate(whisper.aggregationMethod, knownValues)
+		// if lowerIntervalStart == 1589688000 {
+		// 	log.Printf("sum(knownValues) = %v float64(len(knownValues)) = %+v\n", sum(knownValues), float64(len(knownValues)))
+		// 	log.Printf("aggregateValue = %+v\n", aggregateValue)
+		// }
 		point := dataPoint{lowerIntervalStart, aggregateValue}
 		if _, err := whisper.file.WriteAt(point.Bytes(), whisper.getPointOffset(lowerIntervalStart, lower)); err != nil {
 			return false, err

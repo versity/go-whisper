@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math"
 	"math/bits"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"sync"
@@ -761,6 +763,10 @@ func (whisper *Whisper) extendIfNeeded() error {
 		nwhisper.archives[i].stats = archive.stats
 
 		for _, block := range archive.getSortedBlockRanges() {
+			if block.count == 0 {
+				break
+			}
+			log.Printf("%s.block.index = %+v %d - %d %d\n", archive.String(), block.index, block.start, block.end, block.count)
 			buf := make([]byte, archive.blockSize)
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].file.read: %s", i, block.index, err)
@@ -769,6 +775,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 			if err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].read: %s", i, block.index, err)
 			}
+			// log.Printf("dst = %+v\n", dst)
 			// TODO: handle duplicate and out of order data points for non-simv data?
 			if _, err := nwhisper.archives[i].appendToBlockAndRotate(dst, false); err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].write: %s", i, block.index, err)
@@ -897,8 +904,14 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 
 	var start = a.blockRanges[a.cblock.index].start
 	var end = a.blockRanges[a.cblock.index].end
-	var prevStart = a.blockRanges[(a.cblock.index+1)%len(a.blockRanges)].start
-	var prevEnd = a.blockRanges[(a.cblock.index+1)%len(a.blockRanges)].end
+	var prevStart = a.blockRanges[(a.cblock.index+len(a.blockRanges)-1)%len(a.blockRanges)].start
+	// var prevEnd = a.blockRanges[(a.cblock.index+len(a.blockRanges)-1)%len(a.blockRanges)].end
+
+	// len = 3
+	// index = 0
+	// (0+3-1)%3 = 2
+	// (1+3-1)%3 = 0
+	// (2+3-1)%3 = 1
 
 	defer func() {
 		a.cblock.lastByte = bw.buf[bw.index]
@@ -943,7 +956,11 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 		if p.interval == 0 {
 			continue
 		}
-		if (prevStart > 0 && p.interval <= prevStart) || (prevEnd > 0 && p.interval <= prevEnd) {
+		// if (prevStart > 0 && p.interval <= prevStart) || (prevEnd > 0 && p.interval <= prevEnd) {
+		if prevStart > 0 && prevStart >= p.interval {
+			log.Println(a.Retention.String(), a.cblock.index, prevStart, p.interval, len(a.blockRanges), (a.cblock.index+len(a.blockRanges)-1)%len(a.blockRanges))
+			debug.PrintStack()
+			log.Printf("ps = %+v\n", ps)
 			a.stats.discard.oldInterval++
 			continue
 		}
@@ -1799,11 +1816,6 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		return nil
 	}
 
-	// s1,e1
-	// s2,e2
-	// s3,e3
-	// s4,e4
-
 	var baseArchive = whisper.archives[0]
 	var baseRanges = baseArchive.getSortedBlockRanges()
 	var until = baseArchive.cblock.pn1.interval
@@ -1821,56 +1833,12 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		}
 	}
 
-	// var from, until, limit int
-	// // var index []int
-	// for i := len(baseRanges) - 1; i >= 0; i-- {
-	// 	if baseRanges[i].end == 0 {
-	// 		continue
-	// 	}
-
-	// 	if i < 2 && len(baseRanges) > 2 {
-	// 		return nil
-	// 	}
-
-	// 	// This is for delaying propagation as late as possible, to accomodate
-	// 	// out of order writes in the first archive.
-	// 	switch i {
-	// 	case 0:
-	// 		from = baseRanges[i].start
-	// 		until = baseRanges[i].end
-	// 		// index = append(index, i)
-	// 	case 1:
-	// 		from = baseRanges[i-1].start
-	// 		until = baseRanges[i-1].end
-	// 		// index = append(index, i-1)
-	// 	default:
-	// 		from = baseRanges[i-2].start
-	// 		until = baseRanges[i-2].end
-
-	// 		if baseRanges[i-1].start < until {
-	// 			until = baseRanges[i-1].start
-	// 		}
-	// 		// index = append(index, i-2, i-1)
-	// 	}
-
-	// 	// if i <= 2 {
-	// 	// 	limit = from - 1
-	// 	// } else {
-	// 	// 	limit = baseRanges[i-3].end
-	// 	// }
-
-	// 	// index = baseRanges[i].index
-	// 	break
-	// }
-
-	// from = lastArchive.Interval(from)
-	// until = lastArchive.Interval(until)
-
-	// limit = lastArchive.Interval(limit)
-
 	// IMPORTANT: always exclude the last data point to make sure it's not
 	// a pre-mature propagation.
 	until = lastArchive.Interval(until) - largestSPP*3 - 1
+
+	whisper.pointsPerBlock
+
 	// until = lastArchive.Interval(until) - 1
 
 	// if until-from <= 0 {
@@ -1927,9 +1895,32 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 	type groupedDataPoint struct {
 		interval int
 		values   []float64
-		// higherGDPs []groupedDataPoint
+
+		// used for backward-compatible average aggregation for lower archives
+		higherGDPs []*groupedDataPoint
 	}
 	var dpsBySPP = map[int][]groupedDataPoint{}
+	var saveHigherGDPsForOldAverage = func(cgdp *groupedDataPoint, spps []int, index int, interval int) {
+		if whisper.aggregationMethod != Average || index <= 0 {
+			return
+		}
+
+		hgdps := dpsBySPP[spps[index-1]]
+		if len(hgdps) <= 0 {
+			return
+		}
+		hgdp := &hgdps[len(hgdps)-1]
+		hgdpInterval := hgdp.interval - mod(hgdp.interval, spps[index])
+		if hgdpInterval != interval {
+			return
+		}
+		for _, gdp := range cgdp.higherGDPs {
+			if gdp == hgdp {
+				return
+			}
+		}
+		cgdp.higherGDPs = append(cgdp.higherGDPs, hgdp)
+	}
 	for i, dp := range dps {
 		// if dp.interval < limit {
 		// 	// log.Printf("old = %+v\n", dp)
@@ -1945,41 +1936,51 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 			continue
 		}
 
-		for _, spp := range spps {
+		for j, spp := range spps {
 			interval := dp.interval - mod(dp.interval, spp) // same as archiveInfo.AggregateInterval
 
-			// if interval == 1530115200 {
-			// 	log.Printf("dp = %+v\n", dp)
-			// }
+			if interval == 4026531840 {
+				fmt.Printf("dp = %+v ", dp)
+			}
 
 			if len(dpsBySPP[spp]) == 0 {
-				dpsBySPP[spp] = append(dpsBySPP[spp], groupedDataPoint{
+				gdp := groupedDataPoint{
 					interval: interval,
 					values:   []float64{dp.value},
-				})
+				}
+				saveHigherGDPsForOldAverage(&gdp, spps, j, interval)
+
+				dpsBySPP[spp] = append(dpsBySPP[spp], gdp)
 				continue
 			}
 
 			gdp := &dpsBySPP[spp][len(dpsBySPP[spp])-1]
 			if gdp.interval == interval {
 				gdp.values = append(gdp.values, dp.value)
+				saveHigherGDPsForOldAverage(gdp, spps, j, interval)
 				continue
 			}
 
 			// check we have enough data points to propagate a value
 			knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
 			if knownPercent < whisper.xFilesFactor {
-				// dpsBySPP[spp] = dpsBySPP[spp][:len(dpsBySPP[spp])-1]
-
+				// clean up the last data point
 				gdp.interval = interval
 				gdp.values = []float64{dp.value}
+				gdp.higherGDPs = []*groupedDataPoint{}
+
+				saveHigherGDPsForOldAverage(gdp, spps, j, interval)
 				continue
 			}
 
-			dpsBySPP[spp] = append(dpsBySPP[spp], groupedDataPoint{
+			gdp = &groupedDataPoint{
 				interval: interval,
 				values:   []float64{dp.value},
-			})
+			}
+			saveHigherGDPsForOldAverage(gdp, spps, j, interval)
+
+			dpsBySPP[spp] = append(dpsBySPP[spp], *gdp)
+			continue
 		}
 	}
 
@@ -2025,7 +2026,30 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 
 			if arc.aggregationSpec == nil {
 				// TODO: make average backward compatible
-				dps[i].value = aggregate(whisper.aggregationMethod, gdp.values)
+				values := gdp.values
+				if whisper.aggregationMethod == Average && len(gdp.higherGDPs) > 0 {
+					if gdp.interval == 4026531840 {
+						log.Printf("gdp.interval = %+v\n", gdp.interval)
+						log.Printf("values = %+v\n", values)
+					}
+					values = []float64{}
+					for _, gdp := range gdp.higherGDPs {
+						values = append(values, aggregate(Average, gdp.values))
+					}
+					if gdp.interval == 4026531840 {
+						log.Printf("values = %+v\n", values)
+					}
+				}
+
+				dps[i].value = aggregate(whisper.aggregationMethod, values)
+
+				if gdp.interval == 4026531840 {
+					log.Printf("sum(values) = %+v\n", sum(values))
+					log.Printf("len(values) = %+v\n", len(values))
+					log.Printf("dps[i].value = %+v\n", dps[i].value)
+
+					// pretty.Println(gdp.higherGDPs)
+				}
 			} else if arc.aggregationSpec.Method == Percentile {
 				// sorted for percentiles
 				sort.Float64s(gdp.values)
