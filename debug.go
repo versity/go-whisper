@@ -203,7 +203,7 @@ func (arc *archiveInfo) dumpDataPointsCompressed() {
 
 		for i, p := range dps {
 			// continue
-			fmt.Printf("  % 4d %d %s: %v\n", i, p.interval, toTime(p.interval), p.value)
+			fmt.Printf("  %s % 4d %d %s: %v\n", arc.String(), i, p.interval, toTime(p.interval), p.value)
 		}
 	}
 }
@@ -233,7 +233,7 @@ func (whisper *Whisper) dumpDataPointsStandard(archive *archiveInfo) {
 	points := unpackDataPoints(b)
 
 	for i, p := range points {
-		fmt.Printf("%d: %d,% 10v\n", i, p.interval, p.value)
+		fmt.Printf("%s %d: %d,% 10v\n", archive.String(), i, p.interval, p.value)
 	}
 }
 

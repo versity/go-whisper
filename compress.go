@@ -422,41 +422,50 @@ func (whisper *Whisper) fetchCompressed(start, end int64, archive *archiveInfo) 
 			}
 		}
 
-		var pinterval int
-		var vals []float64
-		for i, dp := range dps {
-			// same as archiveInfo.AggregateInterval
-			interval := dp.interval - mod(dp.interval, archive.secondsPerPoint)
-			if pinterval == 0 || pinterval == interval {
-				pinterval = interval
-				vals = append(vals, dp.value)
+		// pretty.Println(dps)
 
-				if i < len(dps)-1 {
-					continue
-				}
-			}
+		adps := whisper.aggregateByArchives(dps)
+		dst = append(dst, adps[archive]...)
 
-			// check we have enough data points to propagate a value
-			knownPercent := float32(len(vals)) / float32(archive.secondsPerPoint/base.secondsPerPoint)
-			if len(vals) > 0 && knownPercent >= whisper.xFilesFactor {
-				var ndp dataPoint
-				ndp.interval = pinterval
-				if whisper.aggregationMethod == Mix {
-					if archive.aggregationSpec.Method == Percentile {
-						ndp.value = aggregatePercentile(archive.aggregationSpec.Percentile, vals)
-					} else {
-						ndp.value = aggregate(archive.aggregationSpec.Method, vals)
-					}
-				} else {
-					ndp.value = aggregate(whisper.aggregationMethod, vals)
-				}
-				dst = append(dst, ndp)
-			}
+		// var pinterval int
+		// var vals []float64
+		// if len(dps) > 0 {
+		// 	log.Printf("dps[0] = %+v\n", dps[0])
+		// 	log.Printf("dps[len(dps)-1] = %+v\n", dps[len(dps)-1])
+		// }
+		// for i, dp := range dps {
+		// 	// same as archiveInfo.AggregateInterval
+		// 	interval := dp.interval - mod(dp.interval, archive.secondsPerPoint)
+		// 	if pinterval == 0 || pinterval == interval {
+		// 		pinterval = interval
+		// 		vals = append(vals, dp.value)
 
-			vals = vals[:0]
-			vals = append(vals, dp.value)
-			pinterval = interval
-		}
+		// 		if i < len(dps)-1 {
+		// 			continue
+		// 		}
+		// 	}
+
+		// 	// check we have enough data points to propagate a value
+		// 	knownPercent := float32(len(vals)) / float32(archive.secondsPerPoint/base.secondsPerPoint)
+		// 	if len(vals) > 0 && knownPercent >= whisper.xFilesFactor {
+		// 		var ndp dataPoint
+		// 		ndp.interval = pinterval
+		// 		if whisper.aggregationMethod == Mix {
+		// 			if archive.aggregationSpec.Method == Percentile {
+		// 				ndp.value = aggregatePercentile(archive.aggregationSpec.Percentile, vals)
+		// 			} else {
+		// 				ndp.value = aggregate(archive.aggregationSpec.Method, vals)
+		// 			}
+		// 		} else {
+		// 			ndp.value = aggregate(whisper.aggregationMethod, vals)
+		// 		}
+		// 		dst = append(dst, ndp)
+		// 	}
+
+		// 	vals = vals[:0]
+		// 	vals = append(vals, dp.value)
+		// 	pinterval = interval
+		// }
 	}
 
 	return dst, nil
@@ -668,7 +677,7 @@ func (archive *archiveInfo) appendToBlockAndRotate(dps []dataPoint, propagateOnR
 		rotated = true
 
 		// propagate only from first archive
-		if propagateOnRotate && archive == whisper.archives[0] {
+		if propagateOnRotate && len(whisper.archives) > 1 && archive == whisper.archives[0] {
 			if err = whisper.batchedPropagateCompressed(); err != nil {
 				return true, err
 			}
@@ -766,7 +775,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 			if block.count == 0 {
 				break
 			}
-			log.Printf("%s.block.index = %+v %d - %d %d\n", archive.String(), block.index, block.start, block.end, block.count)
+			// log.Printf("%s.block.index = %+v %d - %d %d\n", archive.String(), block.index, block.start, block.end, block.count)
 			buf := make([]byte, archive.blockSize)
 			if err := whisper.fileReadAt(buf, int64(archive.blockOffset(block.index))); err != nil {
 				return fmt.Errorf("archives[%d].blocks[%d].file.read: %s", i, block.index, err)
@@ -1794,24 +1803,8 @@ func (dstw *Whisper) FillCompressed(srcw *Whisper) error {
 
 // batchedPropagateCompressed should only be called when rotation is done
 func (whisper *Whisper) batchedPropagateCompressed() error {
-	var largestSPP int
-	var lastArchive *archiveInfo
-	var spps []int
-
-	for _, arc := range whisper.archives[1:] {
-		if arc.secondsPerPoint > largestSPP {
-			largestSPP = arc.secondsPerPoint
-			lastArchive = arc
-		}
-
-		var knownSPP bool
-		for _, spp := range spps {
-			knownSPP = knownSPP || (arc.secondsPerPoint == spp)
-		}
-		if !knownSPP {
-			spps = append(spps, arc.secondsPerPoint)
-		}
-	}
+	var lastArchive = whisper.archives[len(whisper.archives)-1]
+	var largestSPP = lastArchive.secondsPerPoint
 	if largestSPP == 0 {
 		return nil
 	}
@@ -1836,8 +1829,6 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 	// IMPORTANT: always exclude the last data point to make sure it's not
 	// a pre-mature propagation.
 	until = lastArchive.Interval(until) - largestSPP*3 - 1
-
-	whisper.pointsPerBlock
 
 	// until = lastArchive.Interval(until) - 1
 
@@ -1885,8 +1876,229 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		// return fmt.Errorf("mix: failed to baseArchive.ReadFromBlockIndex(%v): %s", index, err)
 	}
 
+	adps := whisper.aggregateByArchives(dps)
+	for _, arc := range whisper.archives[1:] {
+		if dps := adps[arc]; len(dps) > 0 {
+			if _, err := arc.appendToBlockAndRotate(dps, false); err != nil {
+				return fmt.Errorf("mix: failed to propagate archive %s: %s", arc.Retention, err)
+			}
+		}
+	}
+
+	// if len(dps) == 0 {
+	// 	return nil // TODO: should be an error?
+	// }
+
+	// var spps []int
+	// for _, arc := range whisper.archives[1:] {
+	// 	var knownSPP bool
+	// 	for _, spp := range spps {
+	// 		knownSPP = knownSPP || (arc.secondsPerPoint == spp)
+	// 	}
+	// 	if !knownSPP {
+	// 		spps = append(spps, arc.secondsPerPoint)
+	// 	}
+	// }
+
+	// sort.SliceStable(dps, func(i, j int) bool { return dps[i].interval < dps[j].interval })
+	// // for i := 0; i < len(dps); i++ {}
+
+	// type groupedDataPoint struct {
+	// 	interval int
+	// 	values   []float64
+
+	// 	// used for backward-compatible average aggregation for lower archives
+	// 	higherGDPs []*groupedDataPoint
+	// }
+	// var dpsBySPP = map[int][]groupedDataPoint{}
+	// var saveHigherGDPsForOldAverageSum = func(cgdp *groupedDataPoint, spps []int, index int, interval int) {
+	// 	if (whisper.aggregationMethod != Average && whisper.aggregationMethod != Sum) || index <= 0 {
+	// 		return
+	// 	}
+
+	// 	hgdps := dpsBySPP[spps[index-1]]
+	// 	if len(hgdps) <= 0 {
+	// 		return
+	// 	}
+	// 	hgdp := &hgdps[len(hgdps)-1]
+	// 	hgdpInterval := hgdp.interval - mod(hgdp.interval, spps[index])
+	// 	if hgdpInterval != interval {
+	// 		return
+	// 	}
+	// 	for _, gdp := range cgdp.higherGDPs {
+	// 		if gdp == hgdp {
+	// 			return
+	// 		}
+	// 	}
+	// 	cgdp.higherGDPs = append(cgdp.higherGDPs, hgdp)
+	// }
+
+	// for i, dp := range dps {
+	// 	// if dp.interval < limit {
+	// 	// 	// log.Printf("old = %+v\n", dp)
+	// 	// 	continue
+	// 	// }
+
+	// 	// if dp.interval == 1530115200 {
+	// 	// 	log.Printf("dp = %+v\n", dp)
+	// 	// }
+
+	// 	if i < len(dps)-1 && dps[i+1].interval == dp.interval {
+	// 		// log.Printf("dup = %+v\n", dp)
+	// 		continue
+	// 	}
+
+	// 	for j, spp := range spps {
+	// 		interval := dp.interval - mod(dp.interval, spp) // same as archiveInfo.AggregateInterval
+
+	// 		if interval == 1590158940 {
+	// 			fmt.Printf("dp = %+v ", dp)
+	// 		}
+
+	// 		if len(dpsBySPP[spp]) == 0 {
+	// 			gdp := groupedDataPoint{
+	// 				interval: interval,
+	// 				values:   []float64{dp.value},
+	// 			}
+	// 			saveHigherGDPsForOldAverageSum(&gdp, spps, j, interval)
+
+	// 			dpsBySPP[spp] = append(dpsBySPP[spp], gdp)
+	// 			continue
+	// 		}
+
+	// 		gdp := &dpsBySPP[spp][len(dpsBySPP[spp])-1]
+	// 		if gdp.interval == interval {
+	// 			gdp.values = append(gdp.values, dp.value)
+	// 			saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
+	// 			continue
+	// 		}
+
+	// 		// check we have enough data points to propagate a value
+	// 		knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
+	// 		if knownPercent < whisper.xFilesFactor {
+	// 			// clean up the last data point
+	// 			gdp.interval = interval
+	// 			gdp.values = []float64{dp.value}
+	// 			gdp.higherGDPs = []*groupedDataPoint{}
+
+	// 			saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
+	// 			continue
+	// 		}
+
+	// 		gdp = &groupedDataPoint{
+	// 			interval: interval,
+	// 			values:   []float64{dp.value},
+	// 		}
+	// 		saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
+
+	// 		dpsBySPP[spp] = append(dpsBySPP[spp], *gdp)
+	// 		continue
+	// 	}
+	// }
+
+	// if len(dpsBySPP[largestSPP]) == 0 {
+	// 	return nil
+	// }
+
+	// // // var skipInterval int
+	// // var maxBufferSPP = 3 // TODO: come out with a better value?
+	// // // Handle cases of retentions ratio smaller than 3 between base and the
+	// // // last archives.
+	// // if ratio := whisper.archives[0].MaxRetention() / largestSPP; ratio < maxBufferSPP {
+	// // 	maxBufferSPP = 0
+	// // }
+
+	// // // Make sure that we don't propagate prematurely by checking there are
+	// // // enough data points for the last archives.
+	// // for i := len(dpsBySPP[largestSPP]) - 1; i >= 0 && i >= len(dpsBySPP[largestSPP])-maxBufferSPP; i-- {
+	// // 	if len(dpsBySPP[largestSPP][i].values) < largestSPP/whisper.archives[0].secondsPerPoint {
+	// // 		skipInterval = dpsBySPP[largestSPP][i].interval
+	// // 	}
+	// // }
+
+	// for _, arc := range whisper.archives[1:] {
+	// 	gdps := dpsBySPP[arc.secondsPerPoint]
+	// 	dps := make([]dataPoint, len(gdps))
+	// 	_, limit := arc.getRange() // NOTE: not supporting propagation rewrite/out of order
+	// 	for i, gdp := range gdps {
+	// 		// if skipInterval > 0 && gdp.interval >= skipInterval {
+	// 		// 	dps = dps[:i]
+	// 		// 	break
+	// 		// }
+
+	// 		if gdp.interval <= limit {
+	// 			continue
+	// 		}
+
+	// 		dps[i].interval = gdp.interval
+
+	// 		// if gdp.interval == 1530115200 {
+	// 		// 	log.Printf("gdp.values = %+v\n", gdp.values)
+	// 		// }
+
+	// 		if arc.aggregationSpec == nil {
+	// 			// TODO: make average backward compatible
+	// 			values := gdp.values
+	// 			if whisper.aggregationMethod == Average && len(gdp.higherGDPs) > 0 {
+	// 				if gdp.interval == 1590158940 {
+	// 					log.Printf("gdp.interval = %+v\n", gdp.interval)
+	// 					log.Printf("values = %+v\n", values)
+	// 				}
+	// 				values = []float64{}
+	// 				for _, gdp := range gdp.higherGDPs {
+	// 					values = append(values, aggregate(Average, gdp.values))
+	// 				}
+	// 				if gdp.interval == 1590158940 {
+	// 					log.Printf("values = %+v\n", values)
+	// 				}
+	// 			}
+
+	// 			dps[i].value = aggregate(whisper.aggregationMethod, values)
+
+	// 			if gdp.interval == 1590158940 {
+	// 				log.Printf("sum(values) = %+v\n", sum(values))
+	// 				log.Printf("len(values) = %+v\n", len(values))
+	// 				log.Printf("dps[i].value = %+v\n", dps[i].value)
+
+	// 				// pretty.Println(gdp.higherGDPs)
+	// 			}
+	// 		} else if arc.aggregationSpec.Method == Percentile {
+	// 			// sorted for percentiles
+	// 			sort.Float64s(gdp.values)
+
+	// 			dps[i].value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
+	// 		} else {
+	// 			dps[i].value = aggregate(arc.aggregationSpec.Method, gdp.values)
+	// 		}
+	// 	}
+	// 	if len(dps) == 0 {
+	// 		continue
+	// 	}
+
+	// 	if _, err := arc.appendToBlockAndRotate(dps, false); err != nil {
+	// 		return fmt.Errorf("mix: failed to propagate archive %s: %s", arc.Retention, err)
+	// 	}
+	// }
+
+	return nil
+}
+
+func (whisper *Whisper) aggregateByArchives(dps []dataPoint) (adps map[*archiveInfo][]dataPoint) {
+	adps = map[*archiveInfo][]dataPoint{}
+
 	if len(dps) == 0 {
-		return nil // TODO: should be an error?
+		return // TODO: should be an error?
+	}
+
+	var spps []int
+	for _, arc := range whisper.archives[1:] {
+		var knownSPP bool
+		for _, spp := range spps {
+			knownSPP = knownSPP || (arc.secondsPerPoint == spp)
+		}
+		if !knownSPP {
+			spps = append(spps, arc.secondsPerPoint)
+		}
 	}
 
 	sort.SliceStable(dps, func(i, j int) bool { return dps[i].interval < dps[j].interval })
@@ -1900,8 +2112,8 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		higherGDPs []*groupedDataPoint
 	}
 	var dpsBySPP = map[int][]groupedDataPoint{}
-	var saveHigherGDPsForOldAverage = func(cgdp *groupedDataPoint, spps []int, index int, interval int) {
-		if whisper.aggregationMethod != Average || index <= 0 {
+	var saveHigherGDPsForOldAverageSum = func(cgdp *groupedDataPoint, spps []int, index int, interval int) {
+		if (whisper.aggregationMethod != Average && whisper.aggregationMethod != Sum) || index <= 0 {
 			return
 		}
 
@@ -1921,6 +2133,7 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		}
 		cgdp.higherGDPs = append(cgdp.higherGDPs, hgdp)
 	}
+
 	for i, dp := range dps {
 		// if dp.interval < limit {
 		// 	// log.Printf("old = %+v\n", dp)
@@ -1939,16 +2152,16 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		for j, spp := range spps {
 			interval := dp.interval - mod(dp.interval, spp) // same as archiveInfo.AggregateInterval
 
-			if interval == 4026531840 {
-				fmt.Printf("dp = %+v ", dp)
-			}
+			// if interval == 1590046200 {
+			// 	fmt.Printf("dp = %+v ", dp)
+			// }
 
 			if len(dpsBySPP[spp]) == 0 {
 				gdp := groupedDataPoint{
 					interval: interval,
 					values:   []float64{dp.value},
 				}
-				saveHigherGDPsForOldAverage(&gdp, spps, j, interval)
+				saveHigherGDPsForOldAverageSum(&gdp, spps, j, interval)
 
 				dpsBySPP[spp] = append(dpsBySPP[spp], gdp)
 				continue
@@ -1957,44 +2170,49 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 			gdp := &dpsBySPP[spp][len(dpsBySPP[spp])-1]
 			if gdp.interval == interval {
 				gdp.values = append(gdp.values, dp.value)
-				saveHigherGDPsForOldAverage(gdp, spps, j, interval)
+				saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
 				continue
 			}
 
-			// check we have enough data points to propagate a value
-			knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
-			if knownPercent < whisper.xFilesFactor {
-				// clean up the last data point
-				gdp.interval = interval
-				gdp.values = []float64{dp.value}
-				gdp.higherGDPs = []*groupedDataPoint{}
+			// TODO
+			// // check we have enough data points to propagate a value
+			// knownPercent := float32(len(gdp.values)) / float32(spp/baseArchive.secondsPerPoint)
+			// if knownPercent < whisper.xFilesFactor {
+			// 	// clean up the last data point
+			// 	gdp.interval = interval
+			// 	// gdp.values = []float64{dp.value}
+			// 	gdp.values = nil
+			// 	// gdp.higherGDPs = []*groupedDataPoint{}
 
-				saveHigherGDPsForOldAverage(gdp, spps, j, interval)
-				continue
-			}
+			// 	saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
+			// 	// continue
+			// }
 
 			gdp = &groupedDataPoint{
 				interval: interval,
 				values:   []float64{dp.value},
 			}
-			saveHigherGDPsForOldAverage(gdp, spps, j, interval)
+			saveHigherGDPsForOldAverageSum(gdp, spps, j, interval)
 
 			dpsBySPP[spp] = append(dpsBySPP[spp], *gdp)
 			continue
 		}
 	}
 
-	if len(dpsBySPP[largestSPP]) == 0 {
-		return nil
+	{
+		// TODO: think about it
+		// if len(dpsBySPP[largestSPP]) == 0 {
+		// 	return nil
+		// }
 	}
 
-	// var skipInterval int
-	var maxBufferSPP = 3 // TODO: come out with a better value?
-	// Handle cases of retentions ratio smaller than 3 between base and the
-	// last archives.
-	if ratio := whisper.archives[0].MaxRetention() / largestSPP; ratio < maxBufferSPP {
-		maxBufferSPP = 0
-	}
+	// // var skipInterval int
+	// var maxBufferSPP = 3 // TODO: come out with a better value?
+	// // Handle cases of retentions ratio smaller than 3 between base and the
+	// // last archives.
+	// if ratio := whisper.archives[0].MaxRetention() / largestSPP; ratio < maxBufferSPP {
+	// 	maxBufferSPP = 0
+	// }
 
 	// // Make sure that we don't propagate prematurely by checking there are
 	// // enough data points for the last archives.
@@ -2006,9 +2224,9 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 
 	for _, arc := range whisper.archives[1:] {
 		gdps := dpsBySPP[arc.secondsPerPoint]
-		dps := make([]dataPoint, len(gdps))
-		_, limit := arc.getRange()
-		for i, gdp := range gdps {
+		dps := make([]dataPoint, 0, len(gdps))
+		_, limit := arc.getRange() // NOTE: not supporting propagation rewrite/out of order
+		for _, gdp := range gdps {
 			// if skipInterval > 0 && gdp.interval >= skipInterval {
 			// 	dps = dps[:i]
 			// 	break
@@ -2018,7 +2236,9 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 				continue
 			}
 
-			dps[i].interval = gdp.interval
+			dps = append(dps, dataPoint{})
+			dp := &dps[len(dps)-1]
+			dp.interval = gdp.interval
 
 			// if gdp.interval == 1530115200 {
 			// 	log.Printf("gdp.values = %+v\n", gdp.values)
@@ -2027,48 +2247,52 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 			if arc.aggregationSpec == nil {
 				// TODO: make average backward compatible
 				values := gdp.values
-				if whisper.aggregationMethod == Average && len(gdp.higherGDPs) > 0 {
-					if gdp.interval == 4026531840 {
-						log.Printf("gdp.interval = %+v\n", gdp.interval)
-						log.Printf("values = %+v\n", values)
-					}
+
+				if (whisper.aggregationMethod == Average || whisper.aggregationMethod == Sum) && len(gdp.higherGDPs) > 0 {
+					// if gdp.interval == 1590046200 {
+					// 	log.Printf("gdp.interval = %+v\n", gdp.interval)
+					// 	log.Printf("values = %+v\n", values)
+					// 	pretty.Println(gdp.higherGDPs)
+					// }
 					values = []float64{}
 					for _, gdp := range gdp.higherGDPs {
-						values = append(values, aggregate(Average, gdp.values))
+						values = append(values, aggregate(whisper.aggregationMethod, gdp.values))
 					}
-					if gdp.interval == 4026531840 {
-						log.Printf("values = %+v\n", values)
-					}
+					// if gdp.interval == 1590046200 {
+					// 	log.Printf("values = %+v\n", values)
+					// }
 				}
 
-				dps[i].value = aggregate(whisper.aggregationMethod, values)
+				dp.value = aggregate(whisper.aggregationMethod, values)
 
-				if gdp.interval == 4026531840 {
-					log.Printf("sum(values) = %+v\n", sum(values))
-					log.Printf("len(values) = %+v\n", len(values))
-					log.Printf("dps[i].value = %+v\n", dps[i].value)
+				// if gdp.interval == 1590046200 {
+				// 	log.Printf("sum(values) = %+v\n", sum(values))
+				// 	log.Printf("len(values) = %+v\n", len(values))
+				// 	log.Printf("dp.value = %+v\n", dp.value)
 
-					// pretty.Println(gdp.higherGDPs)
-				}
+				// 	// pretty.Println(gdp.higherGDPs)
+				// }
 			} else if arc.aggregationSpec.Method == Percentile {
 				// sorted for percentiles
 				sort.Float64s(gdp.values)
 
-				dps[i].value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
+				dp.value = aggregatePercentile(arc.aggregationSpec.Percentile, gdp.values)
 			} else {
-				dps[i].value = aggregate(arc.aggregationSpec.Method, gdp.values)
+				dp.value = aggregate(arc.aggregationSpec.Method, gdp.values)
 			}
 		}
 		if len(dps) == 0 {
 			continue
 		}
 
-		if _, err := arc.appendToBlockAndRotate(dps, false); err != nil {
-			return fmt.Errorf("mix: failed to propagate archive %s: %s", arc.Retention, err)
-		}
+		adps[arc] = dps
+
+		// if _, err := arc.appendToBlockAndRotate(dps, false); err != nil {
+		// 	return fmt.Errorf("mix: failed to propagate archive %s: %s", arc.Retention, err)
+		// }
 	}
 
-	return nil
+	return
 }
 
 // Same implementation copied from carbonapi, without using quickselect for

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -400,6 +401,8 @@ var cacheTest3Data = flag.Bool("debug-test3", false, "save a data of TestCompres
 //
 // Parallel is disabled because we need to manipulate Now in order to simulate
 // updates.
+//
+// TODO: cache data to make failed tests repeatable and easier to debug
 func TestCompressedWhisperReadWrite3(t *testing.T) {
 	// TODO: add a test case of mixing random and sequential values/times
 	inputs := []struct {
@@ -745,7 +748,88 @@ func TestCompressedWhisperOutOfOrderWrite(t *testing.T) {
 	ncwhisper.Close()
 }
 
-// TODO: TestCompressedVersion1BackwardCompartible
+func TestCWhisperV1BackwardCompatible(t *testing.T) {
+	cpath := "tmp/cwhisper-v1.cwsp"
+	spath := "tmp/cwhisper-v1-standard.wsp"
+	if output, err := exec.Command("cp", "testdata/cwhisper-v1.cwsp", "tmp/cwhisper-v1.cwsp").CombinedOutput(); err != nil {
+		t.Fatalf("failed to cp testdata: %s", output)
+	}
+	if output, err := exec.Command("cp", "testdata/cwhisper-v1-standard.wsp", "tmp/cwhisper-v1-standard.wsp").CombinedOutput(); err != nil {
+		t.Fatalf("failed to cp testdata: %s", output)
+	}
+
+	cwhisper, err := OpenWithOptions(cpath, &Options{IgnoreNowOnWrite: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	swhisper, err := OpenWithOptions(spath, &Options{IgnoreNowOnWrite: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var start = 1590167880
+	{
+		t.Log("go", "run", "cmd/compare.go", "-v", "-now", strconv.Itoa(start), spath, cpath)
+		output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start), spath, cpath).CombinedOutput()
+		if err != nil {
+			t.Log(string(output))
+			t.Error(err)
+		}
+	}
+
+	var loop1 = 123
+	var loop2 = 60 * 3
+	for i := 0; i < loop1; i++ {
+		var ps = make([]*TimeSeriesPoint, 60*3)
+
+		for j := 0; j < loop2; j++ {
+			p := &TimeSeriesPoint{
+				Value: float64(rand.Intn(3000)),
+				Time:  start + 1 + i*loop1 + j,
+			}
+			var index = rand.Intn(loop2)
+			for k := 0; k < loop2; k++ {
+				if ps[(index+k)%(loop2)] == nil {
+					ps[(index+k)%(loop2)] = p
+					break
+				}
+			}
+		}
+
+		// for _, p := range ps {
+		// 	if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
+		// 		t.Fatal(err)
+		// 	}
+		// }
+
+		if err := cwhisper.UpdateMany(ps[0:90]); err != nil {
+			t.Fatal(err)
+		}
+		if err := swhisper.UpdateMany(ps[0:90]); err != nil {
+			t.Fatal(err)
+		}
+		if err := cwhisper.UpdateMany(ps[90:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := swhisper.UpdateMany(ps[90:]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// dataDebugFile.Close()
+
+	{
+		t.Log("go", "run", "cmd/compare.go", "-v", "-now", strconv.Itoa(start+loop1*loop2+1), spath, cpath)
+		output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start+loop1*loop2+1), spath, cpath).CombinedOutput()
+		if err != nil {
+			t.Log(string(output))
+			t.Error(err)
+		}
+	}
+
+	cwhisper.Close()
+	swhisper.Close()
+}
 
 func TestCompressTo(t *testing.T) {
 	fpath := "compress_to.wsp"
