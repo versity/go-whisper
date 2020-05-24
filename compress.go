@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"math"
 	"math/bits"
 	"os"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"sync"
@@ -861,9 +859,9 @@ func (a *archiveInfo) AppendPointsToBlock(buf []byte, ps []dataPoint) (written i
 		}
 		// if (prevStart > 0 && p.interval <= prevStart) || (prevEnd > 0 && p.interval <= prevEnd) {
 		if prevStart > 0 && prevStart >= p.interval {
-			log.Println(a.Retention.String(), a.cblock.index, prevStart, p.interval, len(a.blockRanges), (a.cblock.index+len(a.blockRanges)-1)%len(a.blockRanges))
-			debug.PrintStack()
-			log.Printf("ps = %+v\n", ps)
+			// log.Println(a.Retention.String(), a.cblock.index, prevStart, p.interval, len(a.blockRanges), (a.cblock.index+len(a.blockRanges)-1)%len(a.blockRanges))
+			// debug.PrintStack()
+			// log.Printf("ps = %+v\n", ps)
 			a.stats.discard.oldInterval++
 			continue
 		}
@@ -1714,21 +1712,18 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 		from = firstStart
 	}
 
-	// Why "- 1": always exclude the last data point to make sure it's not
-	// a pre-mature propagation. propagation aggregation is "mod down", check
-	// archiveInfo.AggregateInterval.
-	var until = lastArchive.Interval(firstEnd) - largestSPP*4 - 1
-
-	// 1s:2d;1m:30d;1h:10y
+	// 1s:1d,1m:30d,1h:1y,1d:10y
 	//
 	// 7200 -> 2h
 	//
 	// [0    - 7200)
 	// [7200 - 14400)
-	//
 
-	// only propagate when there are enough data points for all the lower
-	// archives, for perfomance reason (in theory).
+	// Why "- 1": always exclude the last data point to make sure it's not
+	// a pre-mature propagation. propagation aggregation is "mod down", check
+	// archiveInfo.AggregateInterval.
+	var until = lastArchive.Interval(firstEnd) - largestSPP*5 - 1
+
 	if until-from <= 0 {
 		return nil
 	}

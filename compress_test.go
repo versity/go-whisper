@@ -515,7 +515,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 					{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
 					{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
 				},
-				Sum,
+				Average,
 				0,
 				&Options{Compressed: true, PointsPerBlock: 7200, InMemory: inMemory},
 			)
@@ -529,7 +529,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 					{secondsPerPoint: 60, numberOfPoints: 40320},   // 1m:28d
 					{secondsPerPoint: 3600, numberOfPoints: 17520}, // 1h:2y
 				},
-				Sum,
+				Average,
 				0,
 				&Options{Compressed: false, PointsPerBlock: 7200, InMemory: inMemory},
 			)
