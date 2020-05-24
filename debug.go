@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -254,3 +257,173 @@ func GenTestArchive(buf []byte, ret Retention) *archiveInfo {
 }
 
 func GenDataPointSlice() []dataPoint { return []dataPoint{} }
+
+func Compare(
+	file1 string,
+	file2 string,
+	now int,
+	ignoreBuffer bool,
+	quarantinesRaw string,
+	verbose bool,
+	strict bool,
+	muteThreshold int,
+) (msg string, err error) {
+	oflag := os.O_RDONLY
+	db1, err := OpenWithOptions(file1, &Options{OpenFileFlag: &oflag})
+	if err != nil {
+		return "", err
+	}
+	db2, err := OpenWithOptions(file2, &Options{OpenFileFlag: &oflag})
+	if err != nil {
+		return "", err
+	}
+	var quarantines [][2]int
+	if quarantinesRaw != "" {
+		for _, q := range strings.Split(quarantinesRaw, ";") {
+			var quarantine [2]int
+			for i, t := range strings.Split(q, ",") {
+				tim, err := time.Parse("2006-01-02", t)
+				if err != nil {
+					return "", err
+				}
+				quarantine[i] = int(tim.Unix())
+			}
+			quarantines = append(quarantines, quarantine)
+		}
+	}
+
+	if now > 0 {
+		Now = func() time.Time {
+			return time.Unix(int64(now), 0)
+		}
+	}
+
+	var bad bool
+	for index, ret := range db1.Retentions() {
+		from := int(Now().Unix()) - ret.MaxRetention() + ret.SecondsPerPoint()*60
+		until := int(Now().Unix())
+
+		if verbose {
+			msg += fmt.Sprintf("%d %s: from = %+v until = %+v\n", index, ret, from, until)
+		}
+
+		var dps1, dps2 *TimeSeries
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			var err error
+			dps1, err = db1.Fetch(from, until)
+			if err != nil {
+				panic(err)
+			}
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			var err error
+			dps2, err = db2.Fetch(from, until)
+			if err != nil {
+				panic(err)
+			}
+		}()
+
+		wg.Wait()
+
+		if ignoreBuffer {
+			{
+				vals := dps1.Values()
+				vals[len(vals)-1] = math.NaN()
+				vals[len(vals)-2] = math.NaN()
+			}
+			{
+				vals := dps2.Values()
+				vals[len(vals)-1] = math.NaN()
+				vals[len(vals)-2] = math.NaN()
+			}
+		}
+
+		for _, quarantine := range quarantines {
+			qfrom := quarantine[0]
+			quntil := quarantine[1]
+			if from <= qfrom && qfrom <= until {
+				qfromIndex := (qfrom - from) / ret.SecondsPerPoint()
+				quntilIndex := (quntil - from) / ret.SecondsPerPoint()
+				{
+					vals := dps1.Values()
+					for i := qfromIndex; i <= quntilIndex && i < len(vals); i++ {
+						vals[i] = math.NaN()
+					}
+				}
+				{
+					vals := dps2.Values()
+					for i := qfromIndex; i <= quntilIndex && i < len(vals); i++ {
+						vals[i] = math.NaN()
+					}
+				}
+			}
+		}
+
+		var vals1, vals2 int
+		for _, p := range dps1.Values() {
+			if !math.IsNaN(p) {
+				vals1++
+			}
+		}
+		for _, p := range dps2.Values() {
+			if !math.IsNaN(p) {
+				vals2++
+			}
+		}
+
+		msg += fmt.Sprintf("  len1 = %d len2 = %d vals1 = %d vals2 = %d\n", len(dps1.Values()), len(dps2.Values()), vals1, vals2)
+
+		if len(dps1.Values()) != len(dps2.Values()) {
+			bad = true
+			msg += fmt.Sprintf("  size doesn't match: %d != %d\n", len(dps1.Values()), len(dps2.Values()))
+		}
+		if vals1 != vals2 {
+			bad = true
+			msg += fmt.Sprintf("  values doesn't match: %d != %d (%d)\n", vals1, vals2, vals1-vals2)
+		}
+		var ptDiff int
+		for i, p1 := range dps1.Values() {
+			if len(dps2.Values()) < i {
+				break
+			}
+			p2 := dps2.Values()[i]
+			if !((math.IsNaN(p1) && math.IsNaN(p2)) || p1 == p2) {
+				bad = true
+				ptDiff++
+				if verbose {
+					msg += fmt.Sprintf("    %d: %d %v != %v\n", i, dps1.FromTime()+i*ret.SecondsPerPoint(), p1, p2)
+				}
+			}
+		}
+		msg += fmt.Sprintf("  point mismatches: %d\n", ptDiff)
+		if ptDiff <= muteThreshold && !strict {
+			bad = false
+		}
+	}
+	if db1.IsCompressed() {
+		if err := db1.CheckIntegrity(); err != nil {
+			msg += fmt.Sprintf("integrity: %s\n%s", file1, err)
+			bad = true
+		}
+	}
+	if db2.IsCompressed() {
+		if err := db2.CheckIntegrity(); err != nil {
+			msg += fmt.Sprintf("integrity: %s\n%s", file2, err)
+			bad = true
+		}
+	}
+
+	if bad {
+		err = errors.New("whispers not equal")
+	}
+
+	return msg, err
+}

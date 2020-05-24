@@ -408,10 +408,12 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 	inputs := []struct {
 		name      string
 		randLimit func() int
+		fullTest  func() bool
 		gen       func(prevTime time.Time, index int) *TimeSeriesPoint
 	}{
 		{
-			name: "random_time",
+			name:     "random_time",
+			fullTest: func() bool { return true },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: 0,
@@ -420,7 +422,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "random_time_value",
+			name:     "random_time_value",
+			fullTest: func() bool { return true },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
@@ -429,7 +432,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "less_random_time_value",
+			name:     "less_random_time_value",
+			fullTest: func() bool { return true },
 			// randLimit: func() int { return 300 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
@@ -438,9 +442,19 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 				}
 			},
 		},
-
 		{
-			name: "random_value",
+			name:      "fast_simple",
+			fullTest:  func() bool { return true },
+			randLimit: func() int { return 300 },
+			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
+				return &TimeSeriesPoint{Value: 2000.0 + float64(rand.Intn(1000)), Time: int(prevTime.Add(time.Second * 60).Unix())}
+			},
+		},
+
+		// these are slow tests, turned off by default
+		{
+			name:     "random_value",
+			fullTest: func() bool { return *fullTest3 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
@@ -450,6 +464,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 		},
 		{
 			name:      "random_value2",
+			fullTest:  func() bool { return *fullTest3 },
 			randLimit: func() int { return rand.Intn(300) + (60 * 60 * 24) },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
@@ -459,16 +474,10 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "simple",
+			name:     "simple",
+			fullTest: func() bool { return *fullTest3 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{Value: 0, Time: int(prevTime.Add(time.Second).Unix())}
-			},
-		},
-		{
-			name:      "fast_simple",
-			randLimit: func() int { return 300 },
-			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
-				return &TimeSeriesPoint{Value: 2000.0 + float64(rand.Intn(1000)), Time: int(prevTime.Add(time.Second * 60).Unix())}
 			},
 		},
 	}
@@ -577,7 +586,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 						extended++
 					}
 
-					if *fullTest3 {
+					if input.fullTest() {
 						if *cacheTest3Data {
 							// if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
 							// 	t.Fatal(err)
@@ -635,9 +644,10 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// 	}
 			// }
 
-			if *fullTest3 {
+			if input.fullTest() {
 				t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
-				output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+				// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+				output, err := Compare(fpath, fpath+".cwsp", int(now.Unix()), false, "", false, false, 2)
 				if err != nil {
 					t.Log(string(output))
 					t.Error(err)
@@ -664,8 +674,8 @@ func TestCompressedWhisperOutOfOrderWrite(t *testing.T) {
 
 	rets := []*Retention{
 		{secondsPerPoint: 1, numberOfPoints: 7200},
-		{secondsPerPoint: 100, numberOfPoints: 1200},
-		{secondsPerPoint: 300, numberOfPoints: 1200},
+		{secondsPerPoint: 10, numberOfPoints: 1200},
+		{secondsPerPoint: 60, numberOfPoints: 1200},
 	}
 	cwhisper, err := CreateWithOptions(
 		fpath+".cwsp", rets, Sum, 0,
@@ -738,7 +748,8 @@ func TestCompressedWhisperOutOfOrderWrite(t *testing.T) {
 	// dataDebugFile.Close()
 
 	t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", start+loop*60*3), fpath, fpath+".cwsp")
-	output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", start+loop*60*3), fpath, fpath+".cwsp").CombinedOutput()
+	// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", start+loop*60*3), fpath, fpath+".cwsp").CombinedOutput()
+	output, err := Compare(fpath, fpath+".cwsp", start+loop*60*3, false, "", false, false, 2)
 	if err != nil {
 		t.Log(string(output))
 		t.Error(err)
@@ -770,7 +781,8 @@ func TestCWhisperV1BackwardCompatible(t *testing.T) {
 	var start = 1590167880
 	{
 		t.Log("go", "run", "cmd/compare.go", "-v", "-now", strconv.Itoa(start), spath, cpath)
-		output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start), spath, cpath).CombinedOutput()
+		// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start), spath, cpath).CombinedOutput()
+		output, err := Compare(spath, cpath, start, false, "", false, false, 2)
 		if err != nil {
 			t.Log(string(output))
 			t.Error(err)
@@ -820,7 +832,8 @@ func TestCWhisperV1BackwardCompatible(t *testing.T) {
 
 	{
 		t.Log("go", "run", "cmd/compare.go", "-v", "-now", strconv.Itoa(start+loop1*loop2+1), spath, cpath)
-		output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start+loop1*loop2+1), spath, cpath).CombinedOutput()
+		// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", strconv.Itoa(start+loop1*loop2+1), spath, cpath).CombinedOutput()
+		output, err := Compare(spath, cpath, start+loop1*loop2+1, false, "", false, false, 2)
 		if err != nil {
 			t.Log(string(output))
 			t.Error(err)
@@ -886,7 +899,8 @@ func TestCompressTo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := exec.Command("go", "run", "cmd/compare.go", fpath, fpath+".cwsp").CombinedOutput()
+	// output, err := exec.Command("go", "run", "cmd/compare.go", fpath, fpath+".cwsp").CombinedOutput()
+	output, err := Compare(fpath, fpath+".cwsp", 0, false, "", false, false, 2)
 	if err != nil {
 		t.Fatalf("%s: %s", err, output)
 	}
