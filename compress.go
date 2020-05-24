@@ -1713,6 +1713,7 @@ func (whisper *Whisper) batchedPropagateCompressed() error {
 	}
 
 	// 1s:1d,1m:30d,1h:1y,1d:10y
+	// 86400,43200,8760,3650
 	//
 	// 7200 -> 2h
 	//
