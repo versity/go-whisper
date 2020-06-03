@@ -986,13 +986,15 @@ func alignPoints(archive *archiveInfo, points []*TimeSeriesPoint) []dataPoint {
 func packSequences(archive *archiveInfo, points []dataPoint) (intervals []int, packedBlocks [][]byte) {
 	intervals = make([]int, 0)
 	packedBlocks = make([][]byte, 0)
+	var prevInterval int
 	for i, point := range points {
-		if i == 0 || point.interval != intervals[len(intervals)-1]+archive.secondsPerPoint {
+		if i == 0 || point.interval != prevInterval+archive.secondsPerPoint {
 			intervals = append(intervals, point.interval)
 			packedBlocks = append(packedBlocks, point.Bytes())
 		} else {
 			packedBlocks[len(packedBlocks)-1] = append(packedBlocks[len(packedBlocks)-1], point.Bytes()...)
 		}
+		prevInterval = point.interval
 	}
 	return
 }
