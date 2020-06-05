@@ -818,3 +818,41 @@ func TestOpenValidatation(t *testing.T) {
 
 	testWrite(fullHeader)
 }
+
+func testEqualIntervals(intervals1, intervals2 []int) bool {
+	if len(intervals1) != len(intervals2) {
+		return false
+	}
+	for i, interval1 := range intervals1 {
+		if interval1 != intervals2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestPackSequences(t *testing.T) {
+	archive := &archiveInfo{
+		Retention: Retention{
+			secondsPerPoint: 1,
+		},
+	}
+	points := []dataPoint{
+		{interval: 1348003785, value: 1},
+		{interval: 1348003786, value: 2},
+		{interval: 1348003787, value: 3},
+		{interval: 1348003789, value: 5},
+		{interval: 1348003790, value: 6},
+		{interval: 1348003792, value: 8},
+	}
+	gotIntervals, _ := packSequences(archive, points)
+	wantIntervals := []int{
+		1348003785,
+		1348003789,
+		1348003792,
+	}
+	if !testEqualIntervals(gotIntervals, wantIntervals) {
+		t.Errorf("intervals unmatch, got=%v, want=%v",
+			gotIntervals, wantIntervals)
+	}
+}
