@@ -8,7 +8,6 @@ import (
 	"math"
 	"math/rand"
 	"os"
-	"os/exec"
 	"reflect"
 	"testing"
 	"time"
@@ -17,6 +16,12 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/kr/pretty"
 )
+
+func init() {
+	if err := os.MkdirAll("tmp", 0755); err != nil {
+		panic(err)
+	}
+}
 
 func TestBitsReadWrite(t *testing.T) {
 	buf := make([]byte, 256)
@@ -151,7 +156,7 @@ func TestBlockReadWrite2(t *testing.T) {
 }
 
 func TestCompressedWhisperReadWrite1(t *testing.T) {
-	fpath := "comp.whisper"
+	fpath := "tmp/comp1.whisper"
 	os.Remove(fpath)
 	whisper, err := CreateWithOptions(
 		fpath,
@@ -193,39 +198,45 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 	}
 
 	// this negative data points should be ignored
-	if err := whisper.UpdateMany([]*TimeSeriesPoint{{Time: next(0) - 10, Value: 12}}); err != nil {
+	outOfOrderDataPoint := TimeSeriesPoint{Time: next(0) - 10, Value: 12}
+	if err := whisper.UpdateMany([]*TimeSeriesPoint{&outOfOrderDataPoint}); err != nil {
 		t.Error(err)
 	}
-	if got, want := whisper.archives[0].stats.discard.oldInterval, uint32(1); got != want {
-		t.Errorf("whisper.archives[0].stats.discard.oldInterval = %d; want %d", got, want)
-	}
+	// if got, want := whisper.archives[0].stats.discard.oldInterval, uint32(1); got != want {
+	// 	t.Errorf("whisper.archives[0].stats.discard.oldInterval = %d; want %d", got, want)
+	// }
 
 	whisper.Close()
 
-	whisper, err = OpenWithOptions(fpath, &Options{Compressed: true, PointsPerBlock: 7200})
+	whisper, err = OpenWithOptions(fpath, &Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	expectVals := make([]float64, 60)
-	for i := 0; i < 60; i++ {
-		expectVals[i] = math.NaN()
-	}
-	for _, p := range input {
-		expectVals[p.Time-ts-1] = p.Value
-	}
-	expect := &TimeSeries{
-		fromTime:  ts + 1,
-		untilTime: ts + 61,
-		step:      1,
-		values:    expectVals,
-	}
-	if ts, err := whisper.Fetch(ts, ts+300); err != nil {
-		t.Error(err)
-	} else if diff := cmp.Diff(ts, expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
-		t.Error(diff)
-	}
+	// t.Run("out_of_order_write", func(t *testing.T) {
+	// 	expectVals := make([]float64, 60)
+	// 	for i := 0; i < 60; i++ {
+	// 		expectVals[i] = math.NaN()
+	// 	}
+	// 	for _, p := range input {
+	// 		expectVals[p.Time-ts-1] = p.Value
+	// 	}
+	// 	expectVals[outOfOrderDataPoint.Time-ts-1] = outOfOrderDataPoint.Value
+	// 	expect := &TimeSeries{
+	// 		fromTime:  ts + 1,
+	// 		untilTime: ts + 61,
+	// 		step:      1,
+	// 		values:    expectVals,
+	// 	}
+	// 	if ts, err := whisper.Fetch(ts, ts+300); err != nil {
+	// 		t.Error(err)
+	// 	} else if diff := cmp.Diff(ts, expect, cmp.AllowUnexported(TimeSeries{}), cmpopts.EquateNaNs()); diff != "" {
+	// 		t.Error(diff)
+	// 	}
+	// })
 
+	// this test case is no longer valid for cwhisper version 2, buffer
+	// design is deprecated.
 	t.Run("buffer_overflow", func(t *testing.T) {
 		// fmt.Println("---")
 		// whisper.archives[0].dumpDataPointsCompressed()
@@ -287,7 +298,7 @@ func TestCompressedWhisperReadWrite1(t *testing.T) {
 }
 
 func TestCompressedWhisperReadWrite2(t *testing.T) {
-	fpath := "comp.whisper"
+	fpath := "tmp/comp2.whisper"
 	os.Remove(fpath)
 	whisper, err := CreateWithOptions(
 		fpath,
@@ -380,6 +391,7 @@ func TestCompressedWhisperReadWrite2(t *testing.T) {
 }
 
 var fullTest3 = flag.Bool("full-test3", false, "run a full test of TestCompressedWhisperReadWrite3")
+var cacheTest3Data = flag.Bool("debug-test3", false, "save a data of TestCompressedWhisperReadWrite3 for debugging")
 
 // To run a full test of TestCompressedWhisperReadWrite3, it would take about 10
 // minutes, the slowness comes from standard whisper file propagation (around 10
@@ -387,15 +399,19 @@ var fullTest3 = flag.Bool("full-test3", false, "run a full test of TestCompresse
 //
 // Parallel is disabled because we need to manipulate Now in order to simulate
 // updates.
+//
+// TODO: cache data to make failed tests repeatable and easier to debug
 func TestCompressedWhisperReadWrite3(t *testing.T) {
 	// TODO: add a test case of mixing random and sequential values/times
 	inputs := []struct {
 		name      string
 		randLimit func() int
+		fullTest  func() bool
 		gen       func(prevTime time.Time, index int) *TimeSeriesPoint
 	}{
 		{
-			name: "random_time",
+			name:     "random_time",
+			fullTest: func() bool { return true },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: 0,
@@ -404,7 +420,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "random_time_value",
+			name:     "random_time_value",
+			fullTest: func() bool { return true },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
@@ -413,7 +430,9 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "less_random_time_value",
+			name:     "less_random_time_value",
+			fullTest: func() bool { return true },
+			// randLimit: func() int { return 300 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: 2000.0 + float64(rand.Intn(1000)),
@@ -421,9 +440,19 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 				}
 			},
 		},
-
 		{
-			name: "random_value",
+			name:      "fast_simple",
+			fullTest:  func() bool { return true },
+			randLimit: func() int { return 300 },
+			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
+				return &TimeSeriesPoint{Value: 2000.0 + float64(rand.Intn(1000)), Time: int(prevTime.Add(time.Second * 60).Unix())}
+			},
+		},
+
+		// these are slow tests, turned off by default
+		{
+			name:     "random_value",
+			fullTest: func() bool { return *fullTest3 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
 					Value: rand.NormFloat64(),
@@ -433,6 +462,7 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 		},
 		{
 			name:      "random_value2",
+			fullTest:  func() bool { return *fullTest3 },
 			randLimit: func() int { return rand.Intn(300) + (60 * 60 * 24) },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{
@@ -442,7 +472,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			},
 		},
 		{
-			name: "simple",
+			name:     "simple",
+			fullTest: func() bool { return *fullTest3 },
 			gen: func(prevTime time.Time, index int) *TimeSeriesPoint {
 				return &TimeSeriesPoint{Value: 0, Time: int(prevTime.Add(time.Second).Unix())}
 			},
@@ -465,6 +496,15 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			fpath := fmt.Sprintf("tmp/test3_%s.wsp", input.name)
 			os.Remove(fpath)
 			os.Remove(fpath + ".cwsp")
+
+			var dataDebugFile *os.File
+			if *cacheTest3Data {
+				var err error
+				dataDebugFile, err = os.Create(fmt.Sprintf("tmp/test3_%s.data", input.name))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			cwhisper, err := CreateWithOptions(
 				fpath+".cwsp",
@@ -497,7 +537,8 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			cwhisper.Close()
 			ncwhisper.Close()
 
-			var now = time.Now()
+			// var now = time.Now()
+			var now = time.Unix(1589720099, 0)
 			var total = 60*60*24*365*2 + 37
 			var start = now.Add(time.Second * time.Duration(total) * -1)
 			Now = func() time.Time { return start }
@@ -543,7 +584,17 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 						extended++
 					}
 
-					if *fullTest3 {
+					if input.fullTest() {
+						if *cacheTest3Data {
+							// if _, err := fmt.Fprintf(dataDebugFile, "%d\n", len(ps)); err != nil {
+							// 	t.Fatal(err)
+							// }
+							for _, p := range ps {
+								if _, err := fmt.Fprintf(dataDebugFile, "%d %d %d %v\n", p.Time, p.Time-mod(p.Time, 60), p.Time-mod(p.Time, 3600), p.Value); err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
 						ncwhisper, err = OpenWithOptions(fpath, &Options{InMemory: inMemory})
 						if err != nil {
 							t.Fatal(err)
@@ -561,6 +612,10 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 				if start.After(now) {
 					break
 				}
+			}
+
+			if *cacheTest3Data {
+				dataDebugFile.Close()
 			}
 
 			t.Logf("statTotalUpdates: %d extended: %d totalPoints: %d\n", statTotalUpdates, extended, totalPoints)
@@ -587,9 +642,11 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			// 	}
 			// }
 
-			if *fullTest3 {
+			if input.fullTest() {
 				t.Log("go", "run", "cmd/compare.go", "-v", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp")
-				output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+				// output, err := exec.Command("go", "run", "cmd/compare.go", "-now", fmt.Sprintf("%d", now.Unix()), fpath, fpath+".cwsp").CombinedOutput()
+				output, err := Compare(fpath, fpath+".cwsp", int(now.Unix()), false, "", false, false, 2)
+
 				if err != nil {
 					t.Log(string(output))
 					t.Error(err)
@@ -607,6 +664,49 @@ func TestCompressedWhisperReadWrite3(t *testing.T) {
 			t.Logf("compression ratio %s: %.2f%%\n", input.name, float64(cmp.Size()*100)/float64(std.Size()))
 		})
 	}
+}
+
+func TestCompressedWhisperSingleRetentionOutOfOrderWrite(t *testing.T) {
+	fpath := fmt.Sprintf("tmp/test_single_retention_ooo.cwsp")
+	os.Remove(fpath)
+
+	rets := []*Retention{
+		{secondsPerPoint: 1, numberOfPoints: 7200},
+	}
+	cwhisper, err := CreateWithOptions(
+		fpath, rets, Sum, 0,
+		&Options{
+			Compressed: true, PointsPerBlock: 1200,
+			InMemory: false, IgnoreNowOnWrite: true,
+		},
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	now := int(time.Now().Unix()) - 3600
+	cwhisper.UpdateMany([]*TimeSeriesPoint{
+		{Value: 1, Time: now + 0},
+		{Value: 1, Time: now + 1},
+		{Value: 1, Time: now + 2},
+	})
+	cwhisper.UpdateMany([]*TimeSeriesPoint{
+		{Value: 0, Time: now + 1},
+	})
+
+	data, err := cwhisper.Fetch(now-1, now+2)
+	if err != nil {
+		t.Error(err)
+	}
+	if got, want := data.Points(), []TimeSeriesPoint{
+		{Time: now + 0, Value: 1},
+		{Time: now + 1, Value: 1},
+		{Time: now + 2, Value: 1},
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("data.Points() = %v; want %v", got, want)
+	}
+
+	cwhisper.Close()
 }
 
 func TestCompressTo(t *testing.T) {
@@ -664,7 +764,9 @@ func TestCompressTo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := exec.Command("go", "run", "cmd/compare.go", fpath, fpath+".cwsp").CombinedOutput()
+	// output, err := exec.Command("go", "run", "cmd/compare.go", fpath, fpath+".cwsp").CombinedOutput()
+	t.Log("go", "run", "cmd/compare.go", "-v", fpath, fpath+".cwsp")
+	output, err := Compare(fpath, fpath+".cwsp", 0, false, "", false, false, 2)
 	if err != nil {
 		t.Fatalf("%s: %s", err, output)
 	}
@@ -915,7 +1017,7 @@ func TestSanitizeAvgCompressedPointSizeOnCreate(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		fpath := "extend.whisper"
+		fpath := "tmp/extend.whisper"
 		os.Remove(fpath)
 		whisper, err := CreateWithOptions(
 			fpath,
@@ -981,8 +1083,8 @@ func TestEstimatePointSize(t *testing.T) {
 }
 
 func TestFillCompressedMix(t *testing.T) {
-	srcPath := "fill-mix.src.cwsp"
-	dstPath := "fill-mix.dst.cwsp"
+	srcPath := "tmp/fill-mix.src.cwsp"
+	dstPath := "tmp/fill-mix.dst.cwsp"
 	os.Remove(srcPath)
 	os.Remove(dstPath)
 
@@ -1144,7 +1246,7 @@ func TestFillCompressedMix(t *testing.T) {
 }
 
 func TestFetchCompressedMix(t *testing.T) {
-	srcPath := "fetch-mix.cwsp"
+	srcPath := "tmp/fetch-mix.cwsp"
 	os.Remove(srcPath)
 
 	srcMix, err := CreateWithOptions(
@@ -1316,7 +1418,7 @@ func TestFetchCompressedMix(t *testing.T) {
 }
 
 func BenchmarkWriteCompressed(b *testing.B) {
-	fpath := "benchmark_write.cwsp"
+	fpath := "tmp/benchmark_write.cwsp"
 	os.Remove(fpath)
 	cwhisper, err := CreateWithOptions(
 		fpath,
@@ -1366,7 +1468,7 @@ func BenchmarkWriteCompressed(b *testing.B) {
 }
 
 func BenchmarkReadCompressed(b *testing.B) {
-	fpath := "benchmark_write.cwsp"
+	fpath := "tmp/benchmark_write.cwsp"
 	cwhisper, err := OpenWithOptions(fpath, &Options{})
 	if err != nil {
 		b.Fatal(err)
@@ -1384,7 +1486,7 @@ func BenchmarkReadCompressed(b *testing.B) {
 }
 
 func BenchmarkReadStandard(b *testing.B) {
-	fpath := "benchmark_write.wsp"
+	fpath := "tmp/benchmark_write.wsp"
 	cwhisper, err := OpenWithOptions(fpath, &Options{})
 	if err != nil {
 		b.Fatal(err)
@@ -1402,7 +1504,7 @@ func BenchmarkReadStandard(b *testing.B) {
 }
 
 func BenchmarkWriteStandard(b *testing.B) {
-	fpath := "benchmark_write.wsp"
+	fpath := "tmp/benchmark_write.wsp"
 	os.Remove(fpath)
 	cwhisper, err := CreateWithOptions(
 		fpath,

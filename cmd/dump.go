@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -17,21 +18,24 @@ func main() {
 	noLess := flag.Bool("no-less", false, "Don't use less, print everything to stdout.")
 	flag.Parse()
 
+	oflag := os.O_RDONLY
+	db, err := whisper.OpenWithOptions(flag.Args()[0], &whisper.Options{OpenFileFlag: &oflag})
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+
 	less := exec.Command("less")
 	if !*noLess {
 		less.Stdout = os.Stdout
 		temp, err := ioutil.TempFile("", "")
 		if err != nil {
-			panic(err)
+			fmt.Println(err.Error())
+			os.Exit(1)
 		}
 		os.Stdout = temp
 	}
 
-	oflag := os.O_RDONLY
-	db, err := whisper.OpenWithOptions(flag.Args()[0], &whisper.Options{OpenFileFlag: &oflag})
-	if err != nil {
-		panic(err)
-	}
 	db.Dump(!*header, *debug)
 
 	if !*noLess {
