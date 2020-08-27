@@ -157,6 +157,9 @@ type Whisper struct {
 
 	opts     *Options
 	Extended bool
+
+	// TODO: improve
+	NonFatalErrors []error
 }
 
 /*
