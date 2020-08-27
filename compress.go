@@ -625,6 +625,7 @@ func (whisper *Whisper) extendIfNeeded() error {
 	var mixSizes = make(map[int][]float32)
 	var extend bool
 	var msg string
+	var nferrs []error
 	for _, arc := range whisper.archives {
 		ret := &Retention{
 			secondsPerPoint:        arc.secondsPerPoint,
@@ -670,7 +671,9 @@ func (whisper *Whisper) extendIfNeeded() error {
 	}
 
 	filename := whisper.file.Name()
-	os.Remove(whisper.file.Name() + ".extend")
+	if err := os.Remove(whisper.file.Name() + ".extend"); err != nil && !os.IsNotExist(err) {
+		nferrs = append(nferrs, err)
+	}
 
 	if whisper.aggregationMethod == Mix && len(rets) > 1 {
 		rets, mixSpecs, mixSizes = extractMixSpecs(rets, whisper.archives)
@@ -716,22 +719,24 @@ func (whisper *Whisper) extendIfNeeded() error {
 		return fmt.Errorf("extend: failed to writer header: %s", err)
 	}
 
-	// TODO: better error handling
-	whisper.Close()
-	nwhisper.file.Close()
+	if err := whisper.Close(); err != nil {
+		nferrs = append(nferrs, err)
+	}
+	if err := nwhisper.file.Close(); err != nil {
+		nferrs = append(nferrs, err)
+	}
 
 	if whisper.opts.InMemory {
 		whisper.file.(*memFile).data = nwhisper.file.(*memFile).data
 		releaseMemFile(filename + ".extend")
-	} else {
-		if err = os.Rename(filename+".extend", filename); err != nil {
-			return fmt.Errorf("extend/rename: %s", err)
-		}
+	} else if err = os.Rename(filename+".extend", filename); err != nil {
+		return fmt.Errorf("extend/rename: %s", err)
 	}
 
 	nwhisper, err = OpenWithOptions(filename, whisper.opts)
 	*whisper = *nwhisper
 	whisper.Extended = true
+	whisper.NonFatalErrors = append(whisper.NonFatalErrors, nferrs...)
 
 	return err
 }
@@ -1815,13 +1820,6 @@ func (whisper *Whisper) aggregateByArchives(dps []dataPoint) (adps map[*archiveI
 			dpsBySPP[spp] = append(dpsBySPP[spp], *gdp)
 			continue
 		}
-	}
-
-	{
-		// TODO: think about it
-		// if len(dpsBySPP[largestSPP]) == 0 {
-		// 	return nil
-		// }
 	}
 
 	for _, arc := range whisper.archives[1:] {
