@@ -158,11 +158,11 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 	b := make([]byte, hlen)
 	readed, err := whisper.file.Read(b)
 	if err != nil {
-		err = fmt.Errorf("Unable to read header: %s", err.Error())
+		err = fmt.Errorf("unable to read header: %s", err)
 		return
 	}
 	if readed != hlen {
-		err = fmt.Errorf("Unable to read header: EOF")
+		err = fmt.Errorf("unable to read header: EOF")
 		return
 	}
 
@@ -190,7 +190,7 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 		b := make([]byte, CompressedArchiveInfoSize)
 		readed, err = whisper.file.Read(b)
 		if err != nil || readed != CompressedArchiveInfoSize {
-			err = fmt.Errorf("Unable to read compressed archive %d metadata: %s", i, err)
+			err = fmt.Errorf("unable to read compressed archive %d metadata: %s", i, err)
 			return
 		}
 		var offset int
@@ -256,7 +256,7 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 		b := make([]byte, BlockRangeSize*arc.blockCount)
 		readed, err = whisper.file.Read(b)
 		if err != nil || readed != BlockRangeSize*arc.blockCount {
-			err = fmt.Errorf("Unable to read archive %d block ranges: %s", i, err)
+			err = fmt.Errorf("unable to read archive %d block ranges: %s", i, err)
 			return
 		}
 		offset := 0
@@ -283,9 +283,9 @@ func (whisper *Whisper) readHeaderCompressed() (err error) {
 
 		readed, err = whisper.file.Read(arc.buffer)
 		if err != nil {
-			return fmt.Errorf("Unable to read archive %d buffer: %s", i, err)
+			return fmt.Errorf("unable to read archive %d buffer: %s", i, err)
 		} else if readed != arc.bufferSize {
-			return fmt.Errorf("Unable to read archive %d buffer: readed = %d want = %d", i, readed, arc.bufferSize)
+			return fmt.Errorf("unable to read archive %d buffer: readed = %d want = %d", i, readed, arc.bufferSize)
 		}
 	}
 
@@ -1410,7 +1410,7 @@ func dumpBits(data ...uint64) string {
 func (whisper *Whisper) CompressTo(dstPath string) error {
 	// Note: doesn't support mix-aggregation.
 	if whisper.aggregationMethod == Mix {
-		return errors.New("mix aggregation policy isn't supported.")
+		return errors.New("mix aggregation policy isn't supported")
 	}
 
 	var rets []*Retention
