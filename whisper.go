@@ -123,8 +123,8 @@ type MixAggregationSpec struct {
 	Percentile float32
 }
 
-// a simple file interface, mainly used for testing and migration.
-type file interface {
+// WspFile Interface used for interacting with persistent storage
+type WspFile interface {
 	Seek(offset int64, whence int) (ret int64, err error)
 	Fd() uintptr
 	ReadAt(b []byte, off int64) (n int, err error)
@@ -141,7 +141,7 @@ type file interface {
 */
 type Whisper struct {
 	// file *os.File
-	file file
+	file WspFile
 
 	// Metadata
 	aggregationMethod AggregationMethod
@@ -352,6 +352,32 @@ func Create(path string, retentions Retentions, aggregationMethod AggregationMet
 // avgCompressedPointSize specification order:
 // 		Options.PointSize < Retention.avgCompressedPointSize < Options.MixAggregationSpecs.AvgCompressedPointSize
 func CreateWithOptions(path string, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
+	_, err = os.Stat(path)
+	if err == nil {
+		return nil, os.ErrExist
+	}
+	var file WspFile
+	if options.InMemory {
+		file = newMemFile(path)
+		err = nil
+	} else {
+		file, err = os.Create(path)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return CreateWithWspOptions(file, retentions, aggregationMethod, xFilesFactor, options)
+}
+
+func CreateWsp(file WspFile, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32) (whisper *Whisper, err error) {
+	return CreateWithWspOptions(file, retentions, aggregationMethod, xFilesFactor, &Options{
+		Sparse: false,
+		FLock:  false,
+	})
+}
+
+func CreateWithWspOptions(file WspFile, retentions Retentions, aggregationMethod AggregationMethod, xFilesFactor float32, options *Options) (whisper *Whisper, err error) {
 	if options == nil {
 		options = &Options{}
 	}
@@ -360,20 +386,6 @@ func CreateWithOptions(path string, retentions Retentions, aggregationMethod Agg
 	}
 	sort.Sort(retentionsByPrecision{retentions})
 	if err = validateRetentions(retentions); err != nil {
-		return nil, err
-	}
-	_, err = os.Stat(path)
-	if err == nil {
-		return nil, os.ErrExist
-	}
-	var file file
-	if options.InMemory {
-		file = newMemFile(path)
-		err = nil
-	} else {
-		file, err = os.Create(path)
-	}
-	if err != nil {
 		return nil, err
 	}
 
@@ -521,7 +533,7 @@ func (whisper *Whisper) blockCount(archive *archiveInfo) int {
 	return int(math.Ceil(float64(archive.numberOfPoints)/float64(archive.calculateSuitablePointsPerBlock(whisper.pointsPerBlock)))) + 1
 }
 
-func allocateDiskSpace(file file, remaining int) error {
+func allocateDiskSpace(file WspFile, remaining int) error {
 	chunkSize := 16384
 	zeros := make([]byte, chunkSize)
 	for remaining > chunkSize {
@@ -577,7 +589,7 @@ func Open(path string) (whisper *Whisper, err error) {
 }
 
 func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error) {
-	var file file
+	var file WspFile
 	if options.InMemory {
 		file = newMemFile(path)
 	} else {
@@ -598,6 +610,16 @@ func OpenWithOptions(path string, options *Options) (whisper *Whisper, err error
 		}
 	}()
 
+	return OpenWspWithOptions(file, options)
+}
+
+func OpenWsp(file WspFile) (whisper *Whisper, err error) {
+	return OpenWspWithOptions(file, &Options{
+		FLock: false,
+	})
+}
+
+func OpenWspWithOptions(file WspFile, options *Options) (whisper *Whisper, err error) {
 	if options.FLock {
 		if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
 			return
