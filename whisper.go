@@ -1695,8 +1695,6 @@ func crc32(data []byte, prev uint32) uint32 {
 	return crc ^ 0xFFFFFFFF
 }
 
-func (whisper *Whisper) File() *os.File { return whisper.file.(*os.File) }
-
 func (mas *MixAggregationSpec) String() string {
 	if mas.Method == Percentile {
 		if float32(int(mas.Percentile)) == mas.Percentile {
